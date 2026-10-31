@@ -297,6 +297,15 @@ unsafe extern "C" fn fim_exit(ctx: &mut InlineCtx) {
     pilot_frame(out as *mut MappedInputs, raw);
 }
 
+/// Completed UI port array (0x3762ec0 single exit). x22 advanced by
+/// ten 0x30-byte slots after its initial +0x10.
+unsafe extern "C" fn results_frame(ctx: &mut InlineCtx) {
+    let end = ctx.registers[22].x() as usize;
+    if end >= 0x1f0 {
+        crate::results::frame((end - 0x1f0) as *mut _, SETTINGS.load());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Exports: other plugins (the Training Modpack, smash-gamepad-overlay,
 // automation) read the state and may change the settings.
@@ -625,7 +634,7 @@ mod diag {
 }
 
 #[inline]
-fn diag_event(_args: core::fmt::Arguments) {
+pub(crate) fn diag_event(_args: core::fmt::Arguments) {
     #[cfg(feature = "diag")]
     diag::push(_args);
 }
@@ -700,14 +709,14 @@ fn start_worker() -> bool {
 // ---------------------------------------------------------------------------
 // Install.
 
-unsafe fn site_address(site: &Site) -> Option<u64> {
+pub(crate) unsafe fn site_address(site: &Site) -> Option<u64> {
     let start = getRegionAddress(Region::Text) as u64;
     let end = getRegionAddress(Region::Rodata) as u64;
     let address = start + site.offset as u64;
     (address % 4 == 0 && address + 64 <= end).then_some(address)
 }
 
-unsafe fn hook(site: &Site, callback: unsafe extern "C" fn(&mut InlineCtx), allow_chain: bool) -> (Entry, Outcome) {
+pub(crate) unsafe fn hook(site: &Site, callback: unsafe extern "C" fn(&mut InlineCtx), allow_chain: bool) -> (Entry, Outcome) {
     let Some(address) = site_address(site) else {
         return (Entry::Foreign, Outcome::Skipped);
     };
@@ -720,14 +729,14 @@ unsafe fn hook(site: &Site, callback: unsafe extern "C" fn(&mut InlineCtx), allo
     chain::hook::inline(address, &stock, callback)
 }
 
-fn version_is_supported() -> bool {
+pub(crate) fn version_is_supported() -> bool {
     let mut version = nn::oe::DisplayVersion { name: [0; 16] };
     unsafe { nn::oe::GetDisplayVersion(&mut version) };
     let end = version.name.iter().position(|v| *v == 0).unwrap_or(16);
     core::str::from_utf8(&version.name[..end]).is_ok_and(model::version_supported)
 }
 
-fn report_install(report: &mut Line<384>) {
+fn report_install(report: &mut Line<768>) {
     skyline::logging::log(core::str::from_utf8(report.as_bytes()).unwrap_or(""));
     let _ = report.write_char('\n');
     for directory in ["sd:/ultimate", model::DATA_DIR] {
@@ -740,7 +749,7 @@ fn report_install(report: &mut Line<384>) {
 
 #[skyline::main(name = "ssbu-cpu-pilot")]
 pub fn main() {
-    let mut report = Line::<384>::new();
+    let mut report = Line::<768>::new();
     let _ = write!(report, "{} plugin={}/{}", tick(), model::PLUGIN, model::VERSION);
     if !version_is_supported() {
         let _ = write!(report, " result=unsupported_version");
@@ -748,6 +757,7 @@ pub fn main() {
         return;
     }
     TEXT_BASE.store(unsafe { getRegionAddress(Region::Text) as usize }, Ordering::Relaxed);
+    unsafe { crate::results::install(&mut report, results_frame) };
     let result = unsafe { install(&mut report) };
     let _ = write!(report, " result={result} heap_allocations={}", HEAP_ALLOCATIONS.load(Ordering::Relaxed));
     // The Deluxe SDK allocates while registering; that count is kept apart
@@ -767,7 +777,7 @@ pub fn main() {
     report_install(&mut report);
 }
 
-unsafe fn install(report: &mut Line<384>) -> &'static str {
+unsafe fn install(report: &mut Line<768>) -> &'static str {
     for (slot, symbol) in [
         (&MANAGER_SLOT, SYM_MANAGER),
         (&GET_ENTRY, SYM_GET_ENTRY),

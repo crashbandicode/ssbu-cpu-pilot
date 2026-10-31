@@ -335,17 +335,29 @@ pub mod hook {
         stock: &[u32; WORDS],
         callback: unsafe extern "C" fn(&mut InlineCtx),
     ) -> (Entry, Outcome) {
+        inline_with_stub(address, stock, callback,
+            ssbu_chain_stub as *const () as usize as u64, &STUB_TARGET)
+    }
+
+    /// A separate site must supply its own five-NOP stub and target cell.
+    /// This keeps a far-chain installation from retargeting an earlier hook.
+    pub unsafe fn inline_with_stub(
+        address: u64,
+        stock: &[u32; WORDS],
+        callback: unsafe extern "C" fn(&mut InlineCtx),
+        stub: u64,
+        stub_target: &AtomicU64,
+    ) -> (Entry, Outcome) {
         let before = words_at::<WORDS>(address);
         let entry = entry(stock, &before, address);
         let callback = callback as *const c_void;
-        let stub = ssbu_chain_stub as *const () as usize as u64;
         match entry {
             Entry::Foreign => return (entry, Outcome::Skipped),
             Entry::Chain(target) => {
                 if !executable(target, 4) {
                     return (entry, Outcome::Skipped);
                 }
-                STUB_TARGET.store(target, Ordering::Release);
+                stub_target.store(target, Ordering::Release);
                 A64InlineHook(stub as *const c_void, callback);
                 if written(&words_at::<5>(stub), stub).is_none() {
                     return (entry, Outcome::Skipped);
