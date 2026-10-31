@@ -2,11 +2,9 @@
 //! input mapping (`0x1750dd0`), the P1 pilot, the HUD mark, the Deluxe rows,
 //! the exports and the install line.
 //!
-//! Scope: offline battles with a CPU in them (Training, local Smash). The
-//! native AI is ready only while the AI service is in its battle phase
-//! (`service+0x1fc == 2`), which an online match between two people never
-//! reaches without the extra initialization the fork's online path forces;
-//! this plugin does not force it, so it never drives P1 online.
+//! Offline: P1 in battles with a native CPU. Online: the sole locally mapped
+//! human slot in the audited 1v1 scope. Analysis uses an isolated AI RNG lease;
+//! decisions replace mapped input before the normal pack/send path.
 use crate::chain::{self, hook::Outcome, Entry};
 use crate::model::{self, buttons, Kind, Line, Site, TagSlot, TagWrite};
 use core::cell::UnsafeCell;
@@ -22,6 +20,11 @@ use ssbu_cpu_pilot_core::settings::{self, Settings, SharedSettings};
 use ssbu_cpu_pilot_core::level;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+
+#[path = "online_runtime.rs"]
+mod online_runtime;
+#[path = "online_hooks.rs"]
+mod online_hooks;
 
 const OPEN_READ: i32 = 1;
 const OPEN_WRITE_APPEND: i32 = 2 | 4;
@@ -91,7 +94,7 @@ const SYM_RESULT_MODE: &[u8] =
     b"_ZN3app8lua_bind35FighterManager__is_result_mode_implEPNS_14FighterManagerE\0";
 
 /// The pilot's state. Only `fim_exit` touches it, on the game thread, for
-/// player index 0.
+/// the selected local player slot.
 struct Pilot {
     session: Session,
     combo: Combo,
@@ -194,7 +197,7 @@ unsafe fn observe() -> Seen {
 }
 
 /// One P1 frame: the L+R+X combo, then the session's action.
-unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32) {
+unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8) {
     let p = &mut *PILOT.0.get();
     let driving = p.session.armed().is_some();
     if p.combo.step(buttons::combo_held(raw_buttons), driving) {
@@ -206,7 +209,7 @@ unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32) {
         diag_event(format_args!("combo level={}", now.level));
     }
     let wanted = SETTINGS.load();
-    let seen = observe();
+    let seen = online_runtime::observe(slot);
     let same = match (p.armed, seen.native) {
         (Some(a), Some(n)) => a.ctrl == n.ctrl && a.ai == n.ai,
         (Some(_), None) => false,
@@ -253,8 +256,9 @@ unsafe fn arm(p: &mut Pilot, seen: Option<Native>, level: u8) -> bool {
     p.armed = Some(n);
     p.old_rank = old;
     p.stream = stream;
+    ARMED_SLOT.store(n.slot, Ordering::Release);
     ARMED_LEVEL.store(level, Ordering::Release);
-    diag_event(format_args!("arm level={level} rank={rank} old_rank={old}"));
+    diag_event(format_args!("arm level={level} rank={rank} old_rank={old} slot={}", n.slot));
     true
 }
 
@@ -278,14 +282,18 @@ unsafe extern "C" fn fim_valid(ctx: &mut InlineCtx) {
     FIM_CALL.store(1 + u8::from(controller), Ordering::Release);
 }
 
-/// `0x1751ce8`: `*out` is complete. P1 (index 0) only.
+/// `0x1751ce8`: `*out` is complete, still before input packing/transmission.
 unsafe extern "C" fn fim_exit(ctx: &mut InlineCtx) {
     let marker = FIM_CALL.swap(0, Ordering::AcqRel);
     if marker == 0 || !ACTIVE.load(Ordering::Acquire) {
         return;
     }
     let out = ctx.registers[19].x() as usize;
-    if ctx.registers[23].x() != 0 || out == 0 || out % 4 != 0 {
+    let slot = ctx.registers[23].x();
+    if slot >= 8 || out == 0 || out % 4 != 0 {
+        return;
+    }
+    if native::scope(base()) == ssbu_cpu_pilot_core::online::Scope::Offline && slot != 0 {
         return;
     }
     let controller = if marker == 2 { ctx.registers[20].x() as usize } else { 0 };
@@ -295,7 +303,7 @@ unsafe extern "C" fn fim_exit(ctx: &mut InlineCtx) {
         0
     };
     diag_count();
-    pilot_frame(out as *mut MappedInputs, raw);
+    pilot_frame(out as *mut MappedInputs, raw, slot as u8);
 }
 
 /// Completed UI port array (0x3762ec0 single exit). x22 advanced by
@@ -314,8 +322,12 @@ unsafe extern "C" fn results_frame(ctx: &mut InlineCtx) {
 // reads `ARMED_LEVEL` (the only thing the game thread shares with it) and
 // writes only when the wanted text differs from what it last handled.
 
-/// The level the UI thread has handled: 0 = the game's text, n = "CPU Lv<n>".
+/// The slot the pilot is armed on (online the local player may be slot 1).
+static ARMED_SLOT: AtomicU8 = AtomicU8::new(0);
+/// The `model::hud_wanted` byte the UI thread has handled (0 = the game's text).
 static HUD_SETTLED: AtomicU8 = AtomicU8::new(0);
+/// The slot whose tag carries the label, for the restore.
+static HUD_SHOWN_SLOT: AtomicU8 = AtomicU8::new(0);
 /// The slow path is never entered twice at once.
 static HUD_BUSY: AtomicBool = AtomicBool::new(false);
 /// P1's tag text in each HUD variant (`model::HUD_PARTS`); only the slow
@@ -361,15 +373,18 @@ unsafe fn set_text(pane: usize, text: &[u16]) {
     f(pane, text.as_ptr(), text.len() as i32, 0);
 }
 
-/// Puts `wanted` (0 = the game's text) on P1's tag panes under the HUD
-/// layout's root pane; returns how many panes were written.
-unsafe fn hud_write(root: usize, wanted: u8) -> usize {
+/// Puts `wanted` (a level, 0 = the game's text) on the tag panes of player
+/// `player` under the HUD layout's root pane; returns how many were written.
+unsafe fn hud_write(root: usize, wanted: u8, player: u8) -> usize {
     // SAFETY: `HUD_BUSY` is held by the caller.
     let tags = &mut *HUD_TAGS.0.get();
+    let Some(parts_of_player) = model::hud_parts(player) else {
+        return 0;
+    };
     let mut label = [0u16; model::LABEL_CAP];
     let label_len = if wanted != 0 { hud::label_utf16(wanted, &mut label) } else { 0 };
     let mut written = 0;
-    for (slot, parts) in tags.iter_mut().zip(model::HUD_PARTS) {
+    for (slot, parts) in tags.iter_mut().zip(parts_of_player) {
         let Some(pane) = tag_pane(root, parts) else {
             slot.forget();
             continue;
@@ -411,13 +426,25 @@ unsafe fn hud_handle(holder: usize, wanted: u8) {
         return;
     }
     let root = read_usize(layout + model::ui2d::LAYOUT_ROOT);
-    let written = if root != 0 && root % 8 == 0 { hud_write(root, wanted) } else { 0 };
+    let (level, slot) = model::hud_split(wanted);
+    let shown = HUD_SHOWN_SLOT.load(Ordering::Relaxed);
+    let mut written = 0;
+    if root != 0 && root % 8 == 0 {
+        // A label on another slot's tag goes back first.
+        if level == 0 || slot != shown {
+            written += hud_write(root, 0, shown);
+        }
+        if level != 0 {
+            written += hud_write(root, level, slot);
+            HUD_SHOWN_SLOT.store(slot, Ordering::Relaxed);
+        }
+    }
     // Settled whether or not a pane was there: a HUD without the tag is not
     // searched again every frame, and the next change is handled afresh.
     HUD_SETTLED.store(wanted, Ordering::Release);
     HUD_BUSY.store(false, Ordering::Release);
-    if wanted != 0 {
-        diag_event(format_args!("hud set level={wanted} panes={written}"));
+    if level != 0 {
+        diag_event(format_args!("hud set level={level} slot={slot} panes={written}"));
     } else {
         diag_event(format_args!("hud restore panes={written}"));
     }
@@ -426,7 +453,10 @@ unsafe fn hud_handle(holder: usize, wanted: u8) {
 /// `model::HUD_PASS`: runs for every UI holder every frame, with `x23` = the
 /// holder. Costs two atomic loads unless the wanted level changed.
 unsafe extern "C" fn hud_tick(ctx: &mut InlineCtx) {
-    let wanted = ARMED_LEVEL.load(Ordering::Acquire);
+    let wanted = model::hud_wanted(
+        ARMED_LEVEL.load(Ordering::Acquire),
+        ARMED_SLOT.load(Ordering::Acquire),
+    );
     if wanted == HUD_SETTLED.load(Ordering::Relaxed) {
         return;
     }
@@ -889,6 +919,14 @@ pub fn main() {
     TEXT_BASE.store(unsafe { getRegionAddress(Region::Text) as usize }, Ordering::Relaxed);
     // The pilot's hooks first: they get the one chain stub if they need it.
     let result = unsafe { install(&mut report) };
+    // Online: the AI-service hooks. A failure there (or in the mode predicate
+    // it relies on) turns online off only; offline piloting stays installed.
+    // Owners keep the shared manager hooks available to guests regardless.
+    let mode_ok = unsafe { site_usable(&model::MODE_GLOBALS) };
+    if !mode_ok {
+        let _ = write!(report, " site={} guard=mismatch online=off", model::MODE_GLOBALS.name);
+    }
+    unsafe { online_hooks::install(&mut report, result == "installed" && mode_ok) };
     unsafe { crate::results::install(&mut report, results_frame) };
     let _ = write!(report, " result={result} heap_allocations={}", HEAP_ALLOCATIONS.load(Ordering::Relaxed));
     // The Deluxe SDK allocates while registering; that count is kept apart

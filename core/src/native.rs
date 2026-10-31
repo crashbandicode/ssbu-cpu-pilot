@@ -23,6 +23,9 @@ pub mod offsets {
     /// FighterEntry fields.
     pub const ENTRY_CONTROLLER: usize = 0x4178;
     pub const ENTRY_INFO: usize = 0xf8;
+    pub const MODE_INITIALIZED: usize = 0x53144d8;
+    pub const MELEE_MODE: usize = 0x52c51b0;
+    pub const GAME_MODE: usize = 0x53050f0;
 }
 
 /// The AI stream is 20 bytes.
@@ -71,6 +74,69 @@ pub unsafe fn ai_stream(base: usize) -> Option<usize> {
 /// The AI service singleton.
 pub unsafe fn service(base: usize) -> Option<usize> {
     ptr_at(ptr_at(base + offsets::AI_SERVICE)?)
+}
+
+pub unsafe fn scope(base: usize) -> crate::online::Scope {
+    crate::online::scope(
+        read::<u8>(base + offsets::MODE_INITIALIZED) & 1 != 0,
+        read(base + offsets::MELEE_MODE),
+        read(base + offsets::GAME_MODE),
+    )
+}
+
+/// Human-only online isolation must not hide native subfighter AI draws.
+/// set_rank also follows ai+0x980; reject that second AI before arming.
+pub unsafe fn single_human(n: Native) -> bool {
+    read::<usize>(n.ctrl + 0x60) == 0 && read::<usize>(n.ai + 0x980) == 0
+}
+
+/// Native manager inputs/identity used for the scene-wide online lease.
+pub unsafe fn stage_state(service: usize) -> (i32, u8, i32) {
+    (read(service + 0x1fc), read(service + 0xd0), read(service + 0x150))
+}
+
+/// Saved shared inputs for one synchronous process_begin call. Only its
+/// matching post-body hook may finish it, before the native epilogue runs.
+pub struct StageCall {
+    service: usize,
+    random: usize,
+    shared: Stream,
+    d0: u8,
+}
+
+pub unsafe fn stage_begin(service: usize, random: usize, private: Stream) -> StageCall {
+    let call = StageCall {
+        service,
+        random,
+        shared: read(random),
+        d0: read(service + 0xd0),
+    };
+    write(random, private);
+    write(service + 0xd0, call.d0 | 1);
+    call
+}
+
+/// Restore each storage independently, and never dereference a dead singleton.
+pub unsafe fn stage_end(base: usize, call: StageCall) -> Option<(Stream, i32)> {
+    let same_random = ai_stream(base) == Some(call.random);
+    let same_service = service(base) == Some(call.service);
+    let private = if same_random {
+        let private = read(call.random);
+        write(call.random, call.shared);
+        Some(private)
+    } else {
+        None
+    };
+    if same_service {
+        write(call.service + 0xd0, call.d0);
+        private.map(|private| (private, read(call.service + 0x1fc)))
+    } else {
+        None
+    }
+}
+
+pub unsafe fn stream_copy(random: usize) -> Stream {
+    read(random)
 }
 
 /// Qualifies P1's own (human) AI object: back-links, slot, loaded scripts,

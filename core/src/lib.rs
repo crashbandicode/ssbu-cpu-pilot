@@ -9,6 +9,7 @@
 pub mod combo;
 pub mod hud;
 pub mod level;
+pub mod online;
 #[cfg(all(feature = "native", target_os = "switch"))]
 pub mod native;
 pub mod pad;

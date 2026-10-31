@@ -27,7 +27,9 @@ version. Pin a `rev`: the API is versioned by commit until a release.
 | `pad` | yes | `MappedInputs` (8 bytes, the final-input-mapping output), `from_ai`, `pack` / `unpack` |
 | `session` | yes | `Session::step(Frame) -> Action` (`Arm`, `Rearm`, `Think`, `Release`, `None`) |
 | `hud` | yes | the "CPU Lv<n>" label in UTF-16 and ASCII |
-| `native` | Switch only | `controller`, `resolve`, `ready`, `arm`, `think`, `release`, `rank_table` (13.0.5 offsets) |
+| `results` | yes | the per-results-screen policy for auto save replay and auto rematch: steps, frame deadlines, one-port press sequences, no retry after a late signal |
+| `online` | yes | exact online scope, single local controller-slot election, two-entry binding and bounded stage-initialization lease |
+| `native` | Switch only | `controller`, `resolve`, `ready`, `arm`, `think`, `release`, `rank_table`, `scope`, `single_human`, `stage_state`, `stage_begin` / `stage_end`, `stream_copy` (13.0.5 offsets) |
 
 ## The host's part
 
@@ -48,6 +50,16 @@ host checked the 13.0.5 version and the 64-byte guards of `0x2da180`,
 `0x6b8400` and `0x2d8d40` (`src/model.rs`). The AI draws only on a private
 copy of the AI random stream; the shared stream is restored before each
 call returns.
+
+Online human-only battles additionally need stage analysis before `ready`
+succeeds. `src/online_runtime.rs` shows the experimental standalone adapter:
+exact mode admission, controller-slot binding independent of FighterEntry
+index, then a manager-wide lease. `stage_begin` must have a matching
+`stage_end` at the same native call's exit. They restore the shared RNG and
+d0, but not the native phase transition or stage caches. After Ready, keep
+isolating manager calls even with the pilot off; stop at the owning scene's
+end, not a stock transition. This requires its own guards and runtime proof;
+see [ONLINE.md](ONLINE.md). Do not use the raw helpers as a readiness bypass.
 
 ## With the standalone plugin installed
 

@@ -19,22 +19,35 @@ to Deluxe's Plugins page:
 The CPU's decisions come from P1's own native AI object, run on a private
 copy of the AI random stream and written to P1's mapped input; the shared
 random streams and P1's controller fields are restored after every decision.
-P1 always starts as the player after a boot. Results automation presses
-buttons for P1's port only, each step gated on the game's own state, and
-stops for that results screen when a step does not happen in time
-([docs/RESULTS.md](docs/RESULTS.md)).
+P1 always starts as the player after a boot. Offline battles need a native
+CPU present (Training, local Smash). Online, in a 1v1 Quickplay match, the
+CPU drives the local player: the plugin starts the AI service's stage
+analysis on this console under a private copy of the AI random stream, so
+the opponent's console only ever receives ordinary inputs. Two asymmetric
+Eden matches (plugin console against a vanilla one) passed the desync
+detector's end check; switching mid-match, a replay A/B and broader
+simulation-state checks are still to be tested ([docs/ONLINE.md](docs/ONLINE.md),
+[docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md)).
 
-*Status (2026-10-31): in development, not yet released. Eden evidence will
-be in `docs/EDEN-RESULTS.md`.*
+Results automation presses buttons for P1's port only, each step gated on
+the game's own state, and stops for that results screen when a step does not
+happen in time ([docs/RESULTS.md](docs/RESULTS.md)).
+
+*Status (2026-10-31): experimental, not yet released.*
+
+![CPU pilot approaching and attacking in an online match](docs/media/online-pilot.gif)
+
+*Native CPU approach and attacks during asymmetric Quickplay; the match
+continues beyond the clip. Eden `o03`, 2026-10-31, diag NRO `e63b3cc3c648650d`; every second frame.*
 
 ## Library
 
 `core/` is the `ssbu-cpu-pilot-core` crate: settings and their INI form, the
 L+R+X level cycle, the level-to-rank ladder, the AI-to-pad encoding, the
-per-frame pilot session, the results policy and the HUD label, plus
-(feature `native`) the raw AI calls. It has no Skyline dependency, so another
-plugin, such as the Training Modpack, can use it with its own hooks and
-Skyline version ([docs/LIBRARY.md](docs/LIBRARY.md)).
+per-frame pilot session, online admission, the results policy and the HUD
+label, plus (feature `native`) the raw AI calls. It has no Skyline
+dependency, so another plugin, such as the Training Modpack, can use it with
+its own hooks and Skyline version ([docs/LIBRARY.md](docs/LIBRARY.md)).
 
 ## Install
 

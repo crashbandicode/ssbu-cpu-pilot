@@ -54,7 +54,8 @@ impl Site {
 
     /// Whether a called function can be used as it is now.
     pub fn usable(&self, words: &[u32; chain::WORDS], address: u64) -> bool {
-        chain::usable(&self.stock(), words, address, 0)
+        let kept = if self.kind == Kind::Relied { chain::WORDS } else { 0 };
+        chain::usable(&self.stock(), words, address, kept)
     }
 }
 
@@ -189,9 +190,37 @@ pub const SET_TEXT: Site = Site {
 
 /// The match HUD's layout (`Layout::layout_name`).
 pub const HUD_LAYOUT: &[u8] = b"info_melee";
-/// The Parts panes of P1 in the HUD layout: the four-player and the compact
-/// variant, each holding `RootPane/set_txt_00` (the game writes both).
-pub const HUD_PARTS: [&[u8]; 2] = [b"p1\0", b"p1_2\0"];
+/// The Parts panes of each player slot 0..=3 in the HUD layout: the
+/// four-player and the compact variant (`p<n>` uses
+/// `info_melee_lct_player_00`, `p<n>_2` uses `_01`), each holding
+/// `RootPane/set_txt_00` (the game writes both).
+const HUD_PARTS: [[&[u8]; 2]; 4] = [
+    [b"p1\0", b"p1_2\0"],
+    [b"p2\0", b"p2_2\0"],
+    [b"p3\0", b"p3_2\0"],
+    [b"p4\0", b"p4_2\0"],
+];
+
+/// The Parts panes holding the tag of the piloted player's slot (online the
+/// local player may be slot 1); `None` beyond four players.
+pub fn hud_parts(slot: u8) -> Option<[&'static [u8]; 2]> {
+    HUD_PARTS.get(usize::from(slot)).copied()
+}
+
+/// The HUD's wanted state in one byte: 0 = the game's text, else the level
+/// (1..=9) and the slot (0..=3) whose tag shows it.
+pub const fn hud_wanted(level: u8, slot: u8) -> u8 {
+    if level == 0 || slot > 3 {
+        0
+    } else {
+        (level & 0x0f) | (slot << 4)
+    }
+}
+
+/// `(level, slot)` of a `hud_wanted` byte.
+pub const fn hud_split(wanted: u8) -> (u8, u8) {
+    (wanted & 0x0f, wanted >> 4)
+}
 /// The tag TextBox inside a player's Parts layout.
 pub const HUD_TAG_PANE: &[u8] = b"set_txt_00\0";
 
@@ -510,9 +539,38 @@ pub const RESULTS_POPUP_DECISION: Site = Site {
     ],
 };
 
-/// Mode service initialized flag and melee global (fork game_mode guard).
-pub const RESULTS_MODE: Site = Site {
-    name: "results_mode",
+/// process_begin +0x60: x19 is the service owner, x29 is this native frame.
+/// Beyond both Training Modpack's entry hook and its +0x30 body-byte check.
+pub const AI_PROCESS_BEGIN: Site = Site {
+    name: "ai_begin",
+    offset: 0x30c770,
+    kind: Kind::Hooked,
+    hud: false,
+    guard: [
+        0xf4, 0x80, 0x02, 0xd0, 0x89, 0xee, 0x44, 0xf9, 0x29, 0x01, 0x40, 0xf9, 0x2a, 0x7d, 0x41, 0xb9,
+        0x5f, 0x05, 0x00, 0x31, 0x00, 0x08, 0x00, 0x54, 0x28, 0x95, 0x40, 0xf9, 0x08, 0x01, 0x40, 0xf9,
+        0x20, 0xa1, 0x04, 0x91, 0x00, 0x01, 0x3f, 0xd6, 0x68, 0x02, 0x40, 0xf9, 0x09, 0x51, 0x41, 0xb9,
+        0x1f, 0x00, 0x09, 0x6b, 0x00, 0x07, 0x00, 0x54, 0x00, 0x51, 0x01, 0xb9, 0x68, 0x02, 0x40, 0xf9,
+    ],
+};
+
+/// All normal returns of process_begin reach this epilogue with x29 intact.
+pub const AI_PROCESS_END: Site = Site {
+    name: "ai_end",
+    offset: 0x3119d0,
+    kind: Kind::Hooked,
+    hud: false,
+    guard: [
+        0xff, 0x83, 0x05, 0x91, 0xe9, 0x23, 0x43, 0x6d, 0xeb, 0x2b, 0x42, 0x6d, 0xed, 0x33, 0x41, 0x6d,
+        0xfd, 0x7b, 0x49, 0xa9, 0xf4, 0x4f, 0x48, 0xa9, 0xf6, 0x57, 0x47, 0xa9, 0xf8, 0x5f, 0x46, 0xa9,
+        0xfa, 0x67, 0x45, 0xa9, 0xfc, 0x6f, 0x44, 0xa9, 0xef, 0x3b, 0xca, 0x6c, 0xc0, 0x03, 0x5f, 0xd6,
+        0x09, 0x01, 0x40, 0xf9, 0x01, 0xc0, 0x40, 0xbd, 0x03, 0x90, 0x22, 0x1e, 0x00, 0xe4, 0x00, 0x6f,
+    ],
+};
+
+/// Native training predicate identifies the initialized and melee globals.
+pub const MODE_GLOBALS: Site = Site {
+    name: "mode_globals",
     offset: 0x1671650,
     kind: Kind::Relied,
     hud: false,
@@ -524,7 +582,11 @@ pub const RESULTS_MODE: Site = Site {
     ],
 };
 
-pub const SITES: [&Site; 21] = [
+/// The results code's name for the same mode predicate (initialized flag and
+/// melee global, the fork's game_mode guard); one site, one guard.
+pub const RESULTS_MODE: Site = MODE_GLOBALS;
+
+pub const SITES: [&Site; 23] = [
     &FIM_VALID,
     &FIM_EXIT,
     &AI_THINK,
@@ -545,7 +607,9 @@ pub const SITES: [&Site; 21] = [
     &RESULTS_POPUP_FIELDS,
     &RESULTS_CURSOR,
     &RESULTS_POPUP_DECISION,
-    &RESULTS_MODE,
+    &AI_PROCESS_BEGIN,
+    &AI_PROCESS_END,
+    &MODE_GLOBALS,
 ];
 
 /// A text line built in a fixed buffer; anything past `N` bytes is dropped.
@@ -614,6 +678,22 @@ mod tests {
     }
 
     #[test]
+    fn hud_follows_the_piloted_slot() {
+        assert_eq!(hud_parts(0), Some([&b"p1\0"[..], &b"p1_2\0"[..]]));
+        assert_eq!(hud_parts(1), Some([&b"p2\0"[..], &b"p2_2\0"[..]]));
+        assert_eq!(hud_parts(4), None);
+        assert_eq!(hud_wanted(0, 1), 0);
+        assert_eq!(hud_wanted(3, 4), 0);
+        for level in 1..=9 {
+            for slot in 0..=3 {
+                let w = hud_wanted(level, slot);
+                assert_ne!(w, 0);
+                assert_eq!(hud_split(w), (level, slot));
+            }
+        }
+    }
+
+    #[test]
     fn hooked_sites_hold_the_instructions_the_hooks_rely_on() {
         // sxtw x23, w1 ; cmp x23, #8
         assert_eq!(FIM_VALID.stock()[..2], [0x9340_7c37, 0xf100_22ff]);
@@ -632,7 +712,7 @@ mod tests {
     #[test]
     fn stock_sites_are_usable_and_distinct() {
         for site in SITES {
-            if site.kind == Kind::Called {
+            if site.kind != Kind::Hooked {
                 assert!(site.usable(&site.stock(), 0x1000_0000 + site.offset as u64), "{}", site.name);
             }
         }
