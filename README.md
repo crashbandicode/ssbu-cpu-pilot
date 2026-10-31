@@ -38,8 +38,10 @@ P1 as CPU in Training (on and off mid-fight, L+R+X, the HUD tag), the
 Deluxe rows, the card's other 16 plugins alongside, auto save replay in a
 local match, and the CPU driving the local player online, switched on and
 off mid-match, against a vanilla console with the desync detector on both
-(`desync_seen=0` at the same frame). Not yet tested: auto rematch. Evidence:
-[docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md). Not tested on a Switch.*
+(`desync_seen=0` at the same frame), and auto rematch answering Yes on the
+online pop-up, with the rematch played and both sessions checked by the
+detector. Evidence: [docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md). Not tested
+on a Switch.*
 
 ![CPU pilot approaching and attacking in an online match](docs/media/online-pilot.gif)
 

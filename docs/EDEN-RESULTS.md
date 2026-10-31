@@ -163,5 +163,32 @@ old_rank=100 slot=1`; about 17 s later `p1=player`: `release restored=true`,
 `stage_start`. Detectors: Surface `sync_end trigger=normal kind=1 frame=7521
 local=1 desync_seen=0`, Yoga `sync_end … frame=7521 local=0 desync_seen=0`.
 
-**Not yet run in Eden:** auto rematch (online pop-up), the smash-gamepad-overlay
-bridge (a branch of that repo), a replay A/B with the detector.
+
+### Auto rematch (r01 fail, r02 pass)
+
+Online pair as o14 (Surface: this plugin + detector + tile cursor; Yoga:
+detector + tile cursor, no plugin), Quickplay 1 stock, Omega, items and FS
+meter off, `p1=cpu level=9 auto_rematch=on`; the Yoga answered by hand.
+
+- **r01, `3267837` (`b94d05b7…`):** both matches logged `flow=timeout
+  step=Rematch` about 8.5 s after `epoch=begin`; the pop-up came about 15 s
+  after the match, so it went unanswered. Detectors: `desync_seen=0` at the
+  same frame on both (511, 988). Fixed in `582f5c2` (2400-frame wait).
+- **r02, `582f5c2` (`fe5bf7f0…`), pass.** Match 1 (Yoga Yes): `rematch=press_a
+  step=Rematch` at +22.34 s, `rematch=accepted step=Answer` 16 ms later; a new
+  detector session started on both 39.3 s after match 1 and the rematch played
+  (the pilot armed again, `arm level=9 … slot=1`). Match 2 (Yoga No): the
+  plugin pressed Yes (`rematch=press_a`, `rematch=accepted` at +22.25 s); the
+  Yoga returned to the character select, while the Surface stayed on the
+  rematch "Waiting…" screen for the 3.5 min observed, with no error dialog. r01
+  showed the same with the roles swapped (the vanilla Yoga, having said Yes,
+  waited after the Surface had left), which points at Eden's LAN stand-in
+  rather than the plugin; not proven. Detectors: match 1 `sync_end … frame=631
+  … desync_seen=0` and match 2 `frame=1055 … desync_seen=0` on both consoles;
+  no third session; 0 panic/abort/crash and 0 `2306-` on both hosts. Match 2's
+  `epoch=begin` line still showed match 1's pop-up record; it did not cause a
+  press (the step acts only on a pop-up parsed in its own epoch).
+
+**Not yet run in Eden:** the smash-gamepad-overlay bridge (a branch of that
+repo), the Training Modpack branch that uses this library, a replay A/B with
+the detector.
