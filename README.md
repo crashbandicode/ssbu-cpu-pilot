@@ -33,7 +33,13 @@ Results automation presses buttons for P1's port only, each step gated on
 the game's own state, and stops for that results screen when a step does not
 happen in time ([docs/RESULTS.md](docs/RESULTS.md)).
 
-*Status (2026-10-31): experimental, not yet released.*
+*Status (2026-10-31): experimental, not yet released. Tested in Eden:
+P1 as CPU in Training (on and off mid-fight, L+R+X, the HUD tag), the
+Deluxe rows, the card's other 16 plugins alongside, auto save replay in a
+local match, and the CPU driving the local player online, switched on and
+off mid-match, against a vanilla console with the desync detector on both
+(`desync_seen=0` at the same frame). Not yet tested: auto rematch. Evidence:
+[docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md). Not tested on a Switch.*
 
 ![CPU pilot approaching and attacking in an online match](docs/media/online-pilot.gif)
 

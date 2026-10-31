@@ -1,4 +1,8 @@
-# Online Eden evidence — 2026-10-31
+# Eden evidence — 2026-10-31
+
+The merged-build runs (offline, the Deluxe rows, the card set, auto save and
+the online mid-match switch) are at the end, under "Merged builds". The
+sections before them are the first online runs, on branch `online`.
 
 Two asymmetric Quickplay matches reached normal matching-frame detector ends.
 This is scoped RNG-detector evidence, not complete simulation-state safety.
@@ -90,3 +94,74 @@ OpenCode session. No push, tag, release or physical card write was ordered or
 performed. The [completed checklist](ONLINE-COMPLIANCE.md) also records the
 copy/cache/disk evidence gaps. The final Git-status receipt is operator-local
 `/home/intpa/ssbu-cpu-pilot-work/research/online-compliance.md`.
+
+## Merged builds (main `41a497c` → `3267837`)
+
+Eden on the Surface, display `:78`, a hard-linked copy of source profile `g`
+(`/home/intpa/ssbu-cpu-pilot/eden/profiles/c-s`, +619 MB over `g`), Eden
+commit `5a4ed955f1`. Each run: claim and release in the coordination file,
+the profile restored from a baseline (five checks), `console.log` searched
+(0 panic/abort/crash matches in every run). Diag NROs; ticks are the
+19.2 MHz system tick from `events.log`. Raw folders:
+`/home/intpa/ssbu-cpu-pilot/eden/runs/<label>/` (gitignored); per-run notes:
+`/home/intpa/ssbu-cpu-pilot-work/research/eden-merged.md`.
+
+| Run | Build (diag sha256) | What | Result |
+| --- | --- | --- | --- |
+| c11 | `41a497c` (`5d567cf1…`) | Training: on mid-fight, L+R+X, off, on, leave | (a)–(e) pass; (f) fail: armed ~150 s after leaving |
+| c12 | `41a497c` | Deluxe rows | pass |
+| c13 | `41a497c` | the card's 16 plugins + this one | pass |
+| c14, c15 | `41a497c` | auto save, local Smash | fail: mode `0x02010000` refused |
+| c16 | `ff01ab3` (`3a6f3ed4…`) | leave Training, re-enter | pass |
+| c17 | `ff01ab3` | auto save | fail: `flow=timeout step=Cards` (splash needs A) |
+| c18 | `0f4457c` (`76c018ac…`) | auto save, 3 splash presses | fail: presses during the intro |
+| c19 | `3267837` (`b94d05b7…`) | auto save, up to 12 splash presses | pass (twice) |
+| o14 | `ff01ab3` | online mid-match switching against vanilla | pass |
+
+**c11 (Training, P1 vs a CPU).** Install: `result=installed
+heap_allocations=0`. Mid-fight `p1=cpu level=9`: `arm level=9 … slot=0`,
+growing `p1_inputs`, `hud set level=9 slot=0 panes=2`, P1 acting with no host
+input and its tag reading "CPU Lv9". One L+R+X: `combo level=1`, release,
+`arm level=1 rank=0`, tag "CPU Lv1". `p1=player`: `release restored=true`,
+`hud restore`, the original tag back, the host stick moving P1. Armed again:
+`arm level=9`. Leaving Training did not release (fixed in `ff01ab3`, c16).
+
+**c12.** `menu=registered`; Deluxe's Plugins page shows the "CPU Pilot" group
+(P1, Auto rematch, Auto save replay); ZR+Right on P1 in Training: `arm
+level=9`, row "CPU", tag "CPU Lv9"; ZR+Left restored.
+
+**c13.** Every site `stock/near`, `results_rematch=guest` (elite-rematch owns
+`.147fb64`), the other plugins installed, the Training Modpack menu opens
+(B + D-pad Up), `diag.txt` on/off works.
+
+**c16.** `7262200328528 stale no_battle_frames armed_cleared=1`, 1.60 s
+after the last battle frame; no armed lines through the menus; next Training:
+`release restored=false old_rank=100`, `arm level=9 rank=100 old_rank=100
+slot=0`, tag "CPU Lv9"; `p1=player`: `release restored=true`, `hud restore
+panes=2`.
+
+**c19 (local Smash, Final Destination, 1 stock / 1:00, P1 CPU level 9 vs a
+CPU, `auto_save_replay=on`, nothing pressed at results).** All at port 0,
+`mode=0x2010000`, after `epoch=begin` (7325600417180):
+`press_a_splash n=1..6` at +2.95…+8.10 s, then `press_y` +8.15,
+`select_yes` +8.47, `confirm` +8.66, `writing` +8.86, `close_success` +9.13,
+`completed` +9.32 s; no press after `press_y`. New
+`save_data/replay/replay20261031172348.bin` (41,016 B). The game rests on the
+final results card. A second match in the same run gave the same sequence;
+Eden's recorder caught "Replay saved. You can view it in the Vault." (frame
+f0154) and `replay20261031172742.bin` (57,720 B). Both files were removed by
+the restore.
+
+**o14 (online, mid-match switching).** Surface: this plugin + detector + tile
+cursor; Yoga: detector + tile cursor, no plugin (profile `c-y`). Quickplay
+Solo, Sephiroth on both, 2:00 time rules (the four phases need about two
+minutes). Real input on both consoles first (26 input calls each), then
+mid-match `p1=cpu`: `online stage_start slot=1 stage=347 phase=1`, `online
+stage=Ready phase=2 rng_restored=1 d0_restored=1`, `arm level=9 rank=100
+old_rank=100 slot=1`; about 17 s later `p1=player`: `release restored=true`,
+`hud restore panes=2`; then `p1=cpu`: `arm level=9 … slot=1` with no second
+`stage_start`. Detectors: Surface `sync_end trigger=normal kind=1 frame=7521
+local=1 desync_seen=0`, Yoga `sync_end … frame=7521 local=0 desync_seen=0`.
+
+**Not yet run in Eden:** auto rematch (online pop-up), the smash-gamepad-overlay
+bridge (a branch of that repo), a replay A/B with the detector.
