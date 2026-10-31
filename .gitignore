@@ -1,0 +1,6 @@
+/target
+/core/target
+/dist/**/*.so
+/eden/runs
+/eden/shots
+/eden/captures

@@ -1,0 +1,15 @@
+[package]
+name = "ssbu-cpu-pilot-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "P1-as-CPU core for Super Smash Bros. Ultimate 13.0.5 plugins: settings, level cycling, pad encoding and the pilot session; no Skyline dependency"
+license = "MIT"
+
+[features]
+# Switch-only raw game calls (AI think, rank, RNG lease). Still no Skyline
+# dependency: the host installs hooks and passes the main text base.
+native = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("switch"))'] }

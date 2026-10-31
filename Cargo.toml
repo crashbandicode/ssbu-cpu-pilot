@@ -1,0 +1,45 @@
+[package]
+name = "ssbu-cpu-pilot"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Skyline plugin for Super Smash Bros. Ultimate 13.0.5: the native CPU drives P1's pad on demand, with automatic rematch and replay saving"
+license = "MIT"
+
+[package.metadata.skyline]
+titleid = "01006A800016E000"
+
+[workspace]
+members = ["core"]
+
+[features]
+# Eden-only diagnostics (per-event lines, diag.txt switches); never in the shipped NRO.
+diag = []
+
+[lib]
+# cdylib only: Cargo skips LTO for a library that is also an rlib. The
+# reusable library is the separate `ssbu-cpu-pilot-core` crate in core/.
+crate-type = ["cdylib"]
+
+[dependencies]
+ssbu-cpu-pilot-core = { path = "core" }
+
+[target.'cfg(target_os = "switch")'.dependencies]
+ssbu-cpu-pilot-core = { path = "core", features = ["native"] }
+skyline = "=0.6.0"
+deluxe-plugin-sdk = { git = "https://git.syntaxbyexample.com/intpa/ssbu-online-deluxe-rewrite", rev = "a63bc8c" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+# Size over speed: the mapped NRO is the game-heap cost (as in the other plugins).
+opt-level = "s"
+debug = 2
+strip = false
+lto = true
+codegen-units = 1
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("switch"))'] }
