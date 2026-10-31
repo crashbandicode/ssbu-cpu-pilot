@@ -3,4 +3,8 @@
 //! Plugins page: P1 Player/CPU (L+R+X cycles the CPU level), automatic
 //! rematch and automatic replay saving. The logic lives in the
 //! `ssbu-cpu-pilot-core` crate (core/), which other plugins can depend on.
+pub mod chain;
 pub mod model;
+#[cfg(target_os = "switch")]
+mod runtime;
+pub mod share;
