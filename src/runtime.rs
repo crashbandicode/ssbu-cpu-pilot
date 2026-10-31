@@ -1,6 +1,6 @@
 //! Switch only: version check, site guards, the two inline hooks on final
-//! input mapping (`0x1750dd0`), the P1 pilot, the Deluxe rows, the exports
-//! and the install line.
+//! input mapping (`0x1750dd0`), the P1 pilot, the HUD mark, the Deluxe rows,
+//! the exports and the install line.
 //!
 //! Scope: offline battles with a CPU in them (Training, local Smash). The
 //! native AI is ready only while the AI service is in its battle phase
@@ -8,12 +8,13 @@
 //! reaches without the extra initialization the fork's online path forces;
 //! this plugin does not force it, so it never drives P1 online.
 use crate::chain::{self, hook::Outcome, Entry};
-use crate::model::{self, buttons, Kind, Line, Site};
+use crate::model::{self, buttons, Kind, Line, Site, TagSlot, TagWrite};
 use core::cell::UnsafeCell;
 use core::fmt::Write as _;
 use skyline::hooks::{getRegionAddress, InlineCtx, Region};
 use skyline::nn;
 use ssbu_cpu_pilot_core::combo::{self, Combo};
+use ssbu_cpu_pilot_core::hud;
 use ssbu_cpu_pilot_core::native::{self, Native, Stream};
 use ssbu_cpu_pilot_core::pad::{self, MappedInputs};
 use ssbu_cpu_pilot_core::session::{Action, Frame, Session};
@@ -295,6 +296,132 @@ unsafe extern "C" fn fim_exit(ctx: &mut InlineCtx) {
     };
     diag_count();
     pilot_frame(out as *mut MappedInputs, raw);
+}
+
+// ---------------------------------------------------------------------------
+// The HUD mark: while the CPU drives P1, P1's tag text reads "CPU Lv<n>".
+// UI only: nothing of the battle is touched. The text is written from the UI
+// manager's per-frame pass (`model::HUD_PASS`, the UI job's thread), which
+// reads `ARMED_LEVEL` (the only thing the game thread shares with it) and
+// writes only when the wanted text differs from what it last handled.
+
+/// The level the UI thread has handled: 0 = the game's text, n = "CPU Lv<n>".
+static HUD_SETTLED: AtomicU8 = AtomicU8::new(0);
+/// The slow path is never entered twice at once.
+static HUD_BUSY: AtomicBool = AtomicBool::new(false);
+/// P1's tag text in each HUD variant (`model::HUD_PARTS`); only the slow
+/// path, under `HUD_BUSY`, touches it.
+static HUD_TAGS: Owned<[TagSlot; 2]> = Owned(UnsafeCell::new([TagSlot::new(), TagSlot::new()]));
+
+unsafe fn read_u16(address: usize) -> u16 {
+    (address as *const u16).read_unaligned()
+}
+
+/// `nn::ui2d::Pane::FindPaneByName` over `from`'s subtree; `name` is NUL-terminated.
+unsafe fn find_pane(from: usize, name: &[u8]) -> Option<usize> {
+    let f: extern "C" fn(usize, *const u8) -> usize =
+        core::mem::transmute(base() + model::FIND_PANE.offset);
+    let pane = f(from, name.as_ptr());
+    (pane != 0 && pane % 8 == 0).then_some(pane)
+}
+
+/// The tag TextBox under one of P1's Parts panes.
+unsafe fn tag_pane(root: usize, parts: &[u8]) -> Option<usize> {
+    find_pane(find_pane(root, parts)?, model::HUD_TAG_PANE)
+}
+
+/// The TextBox's text, copied out; `None` unless it is a plain UTF-16 text.
+unsafe fn read_tag(pane: usize, out: &mut [u16; model::TAG_CAP + 1]) -> Option<usize> {
+    let buf = read_usize(pane + model::ui2d::TEXT_BUF);
+    let units = model::tag_text_units(
+        ((pane + model::ui2d::TEXT_IS_UTF8) as *const u8).read(),
+        buf,
+        read_u16(pane + model::ui2d::TEXT_LEN),
+        read_u16(pane + model::ui2d::TEXT_CAP),
+    )?;
+    if units != 0 {
+        core::ptr::copy_nonoverlapping(buf as *const u16, out.as_mut_ptr(), units);
+    }
+    Some(units)
+}
+
+/// The game's UTF-16 text setter; it grows the TextBox's buffer when needed.
+unsafe fn set_text(pane: usize, text: &[u16]) {
+    let f: extern "C" fn(usize, *const u16, i32, u32) =
+        core::mem::transmute(base() + model::SET_TEXT.offset);
+    f(pane, text.as_ptr(), text.len() as i32, 0);
+}
+
+/// Puts `wanted` (0 = the game's text) on P1's tag panes under the HUD
+/// layout's root pane; returns how many panes were written.
+unsafe fn hud_write(root: usize, wanted: u8) -> usize {
+    // SAFETY: `HUD_BUSY` is held by the caller.
+    let tags = &mut *HUD_TAGS.0.get();
+    let mut label = [0u16; model::LABEL_CAP];
+    let label_len = if wanted != 0 { hud::label_utf16(wanted, &mut label) } else { 0 };
+    let mut written = 0;
+    for (slot, parts) in tags.iter_mut().zip(model::HUD_PARTS) {
+        let Some(pane) = tag_pane(root, parts) else {
+            slot.forget();
+            continue;
+        };
+        let mut text = [0u16; model::TAG_CAP + 1];
+        let Some(units) = read_tag(pane, &mut text) else {
+            slot.forget();
+            continue;
+        };
+        match slot.step(wanted, pane, &text[..units], &label[..label_len]) {
+            TagWrite::Keep => {}
+            TagWrite::Label => {
+                set_text(pane, &label[..label_len]);
+                written += 1;
+            }
+            TagWrite::Original(original) => {
+                set_text(pane, original);
+                written += 1;
+            }
+        }
+    }
+    written
+}
+
+/// The slow path: `holder`'s layout is the match HUD, so settle on `wanted`.
+unsafe fn hud_handle(holder: usize, wanted: u8) {
+    if holder == 0 || holder % 8 != 0 {
+        return;
+    }
+    let layout = read_usize(holder + model::ui2d::HOLDER_LAYOUT);
+    if layout == 0 || layout % 8 != 0 {
+        return;
+    }
+    let name = read_usize(layout + model::ui2d::LAYOUT_NAME);
+    if name == 0 || !model::name_is(|i| ((name + i) as *const u8).read(), model::HUD_LAYOUT) {
+        return;
+    }
+    if HUD_BUSY.swap(true, Ordering::Acquire) {
+        return;
+    }
+    let root = read_usize(layout + model::ui2d::LAYOUT_ROOT);
+    let written = if root != 0 && root % 8 == 0 { hud_write(root, wanted) } else { 0 };
+    // Settled whether or not a pane was there: a HUD without the tag is not
+    // searched again every frame, and the next change is handled afresh.
+    HUD_SETTLED.store(wanted, Ordering::Release);
+    HUD_BUSY.store(false, Ordering::Release);
+    if wanted != 0 {
+        diag_event(format_args!("hud set level={wanted} panes={written}"));
+    } else {
+        diag_event(format_args!("hud restore panes={written}"));
+    }
+}
+
+/// `model::HUD_PASS`: runs for every UI holder every frame, with `x23` = the
+/// holder. Costs two atomic loads unless the wanted level changed.
+unsafe extern "C" fn hud_tick(ctx: &mut InlineCtx) {
+    let wanted = ARMED_LEVEL.load(Ordering::Acquire);
+    if wanted == HUD_SETTLED.load(Ordering::Relaxed) {
+        return;
+    }
+    hud_handle(ctx.registers[23].x() as usize, wanted);
 }
 
 // ---------------------------------------------------------------------------
@@ -707,14 +834,17 @@ unsafe fn site_address(site: &Site) -> Option<u64> {
     (address % 4 == 0 && address + 64 <= end).then_some(address)
 }
 
-unsafe fn hook(site: &Site, callback: unsafe extern "C" fn(&mut InlineCtx), allow_chain: bool) -> (Entry, Outcome) {
+/// `chain` has one stub: the first site that needs it (another plugin's far
+/// jump over the site) takes it; a later such site is left alone.
+static STUB_USED: AtomicBool = AtomicBool::new(false);
+
+unsafe fn hook(site: &Site, callback: unsafe extern "C" fn(&mut InlineCtx)) -> (Entry, Outcome) {
     let Some(address) = site_address(site) else {
         return (Entry::Foreign, Outcome::Skipped);
     };
     let stock = site.stock();
     let entry = chain::entry(&stock, &chain::hook::words_at(address), address);
-    // `chain` has one stub; only the first hooked site may chain through it.
-    if matches!(entry, Entry::Chain(_)) && !allow_chain {
+    if matches!(entry, Entry::Chain(_)) && STUB_USED.swap(true, Ordering::Relaxed) {
         return (entry, Outcome::Skipped);
     }
     chain::hook::inline(address, &stock, callback)
@@ -787,9 +917,8 @@ unsafe fn install(report: &mut Line<384>) -> &'static str {
         return "not_installed";
     };
     (*PILOT.0.get()).ranks = ranks;
-    for site in model::SITES.iter().filter(|s| s.kind == Kind::Called) {
-        let usable = site_address(site).is_some_and(|a| site.usable(&chain::hook::words_at(a), a));
-        if !usable {
+    for site in model::SITES.iter().filter(|s| s.kind == Kind::Called && !s.hud) {
+        if !site_usable(site) {
             let _ = write!(report, " site={} guard=mismatch", site.name);
             return "not_installed";
         }
@@ -803,17 +932,39 @@ unsafe fn install(report: &mut Line<384>) -> &'static str {
         u8::from(loaded.auto_rematch),
         u8::from(loaded.auto_save_replay)
     );
-    let (entry, outcome) = hook(&model::FIM_VALID, fim_valid, true);
+    let (entry, outcome) = hook(&model::FIM_VALID, fim_valid);
     let _ = write!(report, " fim_valid={}/{}", entry.name(), outcome.name());
     if !outcome.hooked() {
         return "not_installed";
     }
-    let (entry, outcome) = hook(&model::FIM_EXIT, fim_exit, false);
+    let (entry, outcome) = hook(&model::FIM_EXIT, fim_exit);
     let _ = write!(report, " fim_exit={}/{}", entry.name(), outcome.name());
     if !outcome.hooked() {
         // The exit hook never ran, so the marker hook only sets a flag.
         return "not_installed";
     }
+    install_hud(report);
     ACTIVE.store(true, Ordering::Release);
     "installed"
+}
+
+unsafe fn site_usable(site: &Site) -> bool {
+    site_address(site).is_some_and(|a| site.usable(&chain::hook::words_at(a), a))
+}
+
+/// The HUD mark. Never fails the plugin: whatever is wrong, the pilot is
+/// installed and the line says `hud=off`.
+unsafe fn install_hud(report: &mut Line<384>) {
+    for site in model::SITES.iter().filter(|s| s.kind == Kind::Called && s.hud) {
+        if !site_usable(site) {
+            let _ = write!(report, " hud=off site={} guard=mismatch", site.name);
+            return;
+        }
+    }
+    let (entry, outcome) = hook(&model::HUD_PASS, hud_tick);
+    if outcome.hooked() {
+        let _ = write!(report, " hud={}/{}", entry.name(), outcome.name());
+    } else {
+        let _ = write!(report, " hud=off hud_pass={}/{}", entry.name(), outcome.name());
+    }
 }
