@@ -570,6 +570,30 @@ mod diag {
         }
     }
 
+    static DIAG_HASH: AtomicU64 = AtomicU64::new(0);
+
+    /// Eden switch: when `diag.txt` changes, its `key=value` lines (the
+    /// `config.ini` keys) replace the settings, including `p1=cpu`.
+    pub fn reload() {
+        let mut buf = [0u8; 256];
+        let n = read_file(&mut path(format_args!("{}/diag.txt", model::DATA_DIR)), &mut buf);
+        let hash = buf[..n]
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3));
+        if n == 0 || DIAG_HASH.swap(hash, Ordering::AcqRel) == hash {
+            return;
+        }
+        let wanted = settings::parse_ini(core::str::from_utf8(&buf[..n]).unwrap_or(""));
+        SETTINGS.store(wanted);
+        push(format_args!(
+            "diag settings p1={} level={} auto_rematch={} auto_save_replay={}",
+            u8::from(wanted.pilot),
+            wanted.level,
+            u8::from(wanted.auto_rematch),
+            u8::from(wanted.auto_save_replay)
+        ));
+    }
+
     pub fn drain(tail: &mut u64) {
         let head = EVENT_HEAD.load(Ordering::Acquire);
         if head == *tail {
@@ -634,13 +658,21 @@ static WORKER_THREAD: ThreadObject = ThreadObject(UnsafeCell::new([0; 0x1c0]));
 extern "C" fn worker_main(_: *mut skyline::libc::c_void) {
     #[cfg(feature = "diag")]
     let mut tail = 0;
+    #[cfg(feature = "diag")]
+    let mut round = 0u32;
     loop {
         unsafe { nn::os::SleepThread(nn::TimeSpan { nanoseconds: 200_000_000 }) };
         if DIRTY.swap(false, Ordering::AcqRel) {
             save_settings();
         }
         #[cfg(feature = "diag")]
-        diag::drain(&mut tail);
+        {
+            round = round.wrapping_add(1);
+            if round % 10 == 0 {
+                diag::reload();
+            }
+            diag::drain(&mut tail);
+        }
     }
 }
 
