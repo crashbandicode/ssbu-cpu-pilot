@@ -56,15 +56,34 @@ An epoch is `[[main+52c35d0]+8]`; teardown at `150ea38` destroys and nulls its
 wrapper. A sampled zero separates reused addresses. Cards are borrowed only
 at `1d59560`, never dereferenced later; cached readiness expires after one UI
 callback. Offline P1 uses fighter-entry 0 through `[main+52c50f0]+298`, matching
-the mapping code at `1d59dc4`. Online uses only first local UI port 0.
+the mapping code at `1d59dc4`; it is sampled only with the cards, so before them
+(the winner splash) there is no offline port. Online uses only first local UI port 0.
 
 Each frame means one completed UI-builder invocation; seconds below assume
 60 Hz and are not measured. Settings bind per epoch; disabling, scene/port
 changes, missing/incorrect signals, failure status, or deadline ends that
 epoch without retry. A late signal cannot restart it.
 
+0. Local winner splash (Eden c17, c14): offline results open on a splash that
+   never advances alone (c17 sat 28 s with no cards sample; in c14 the cards
+   and the Y prompt appeared only after manual A presses). While no cards
+   sample of this epoch exists, press A on the splash: the first 90 frames
+   after epoch begin, then another every 60 frames (A pulse as below, 17
+   frames long), at most 3 per epoch. Each is logged as
+   `save=press_a_splash n=<k>`. The moment any cards sample for the epoch
+   arrives, ready or not (including one whose port could not be read), no A is
+   ever pressed again in that epoch, and an A still held is released at once
+   on its own port. Never on Training, replay playback, any unsupported scene,
+   online, or with `auto_save_replay` off. **Assumption Eden must confirm:**
+   no fighter-entry mapping exists before the cards, so the splash A goes to
+   UI port 0 (P1's controller) and to no other port; the later Y/Right/A
+   still use the cards' port (`cards_port`), which may differ.
 1. Local cards: wait under 1200 frames (20 s) for phase/pending 2, finished=0,
    save_offered=1, popup idle, modal mask <=1, and save status 0. Then Y once.
+   The 1200-frame deadline is counted from the last splash A (or from epoch
+   begin if none was pressed), so the splash presses never shorten it: the
+   worst case from begin is 90+60+60+1200 frames. Once any cards sample exists
+   the flow only waits for these conditions; it never presses A for the splash.
 2. Wait under 180 frames (3 s) for status 1 and ready Save popup record
    `58ffff145ea6f7be`, default=1, cancel=0, input mode=2, cursor=1.
 3. Right bit21 plus stick +X for at most 11 frames, stopping when cursor=2;
@@ -104,14 +123,18 @@ Mode reads follow the supplied game_mode guard. The local `0101xxxx` allowlist
 is inferred from the replay plugin's `guards.rs` live-mode fixture; online is
 `07xxxxxx`. Their values during results still need runtime qualification.
 Other modes, including training, playback and local wireless, do not save.
-Online UI port acceptance, local P1 mapping, effective Right input, one
+The splash A (core tests `splash_a_*`, `no_splash_a_*`, `full_save_sequence_still_*`)
+is host-tested only: whether UI port 0 reaches the splash, whether 1 to 3 As
+advance it, and whether a cards sample is taken on the first cards frame are
+all unverified. Online UI port acceptance, local P1 mapping, effective Right input, one
 callback per frame, transient decision visibility, timing, storage failure,
 actual replay creation, and rematch countdown completion remain unverified.
 Offline rematch is omitted because CSS/stage/start signals were not proven.
 
 Diagnostics emit transition lines with this literal format (numbers vary):
 `results epoch=0x... port=N TOKEN step=STAGE status=N popup=0x... phase=N cursor=N mode=0x...`.
-For a save, require in order `save=press_y`, `save=select_yes`, `save=confirm`,
+Offline, zero to three `save=press_a_splash n=1..3` lines (port=0) may precede the
+save tokens, and none follows `save=press_y`. For a save, require in order `save=press_y`, `save=select_yes`, `save=confirm`,
 `save=writing`, `save=close_success`, `save=completed` with final status=5.
 Online require `save=skipped_online` when enabled, then `rematch=press_a`
 and `rematch=accepted`. Install must show `results_cards=stock/near` (or `/far`),

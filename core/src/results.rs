@@ -8,7 +8,20 @@ pub const RIGHT: u32 = 1 << 21;
 pub const SAVE_RECORD: u64 = 0x58ff_ff14_5ea6_f7be;
 pub const SUCCESS_RECORD: u64 = 0x58ff_ff1e_1eed_5764;
 pub const REMATCH_RECORD: u64 = 0x58ff_ff1c_b2b1_1288;
+/// Offline Cards wait, counted from the last splash A (or epoch begin when none
+/// was pressed), so the splash presses below never eat into it.
 pub const CARDS_TIMEOUT: u16 = 1200;
+/// Offline results open on the winner splash, which shows no cards and never
+/// advances alone (Eden c17: unchanged for 28 s; c14: the cards appeared only
+/// after A presses). First A this many frames after epoch begin, then one every
+/// `SPLASH_GAP` frames, at most `SPLASH_MAX` per epoch, and none once any cards
+/// sample (ready or not) for the epoch exists.
+pub const SPLASH_SETTLE: u16 = 90;
+pub const SPLASH_GAP: u16 = 60;
+pub const SPLASH_MAX: u8 = 3;
+/// Before the cards sample there is no fighter-entry port mapping. The splash A
+/// goes to UI port 0 (P1's controller): an assumption Eden must confirm.
+pub const SPLASH_PORT: u8 = 0;
 pub const DIALOG_TIMEOUT: u16 = 180;
 pub const SAVE_TIMEOUT: u16 = 900;
 pub const CLOSE_TIMEOUT: u16 = 480;
@@ -97,6 +110,8 @@ pub struct Frame {
     pub epoch: usize,
     pub scene: Scene,
     pub port: Option<u8>,
+    /// Any cards sample (ready or not) was taken for this epoch.
+    pub cards_seen: bool,
     pub cards_ready: bool,
     pub save_status: Option<i32>,
     pub popup: Option<Popup>,
@@ -147,6 +162,8 @@ pub enum Event {
     Begin,
     SaveSkippedOnline,
     Unsupported,
+    /// The k-th (1-based) splash A of this epoch, on `SPLASH_PORT`.
+    SplashA(u8),
     SaveY,
     SaveRight,
     SaveConfirm,
@@ -241,6 +258,11 @@ pub struct Results {
     right_frames: u8,
     neutral: u8,
     rematch_seen: bool,
+    /// Latched: a cards sample existed in this epoch. Ends the splash presses.
+    cards_seen: bool,
+    splash: u8,
+    /// The in-flight pulse is a splash A, which rides `SPLASH_PORT`, not `port`.
+    splash_pulse: bool,
 }
 
 impl Default for Results {
@@ -264,6 +286,9 @@ impl Results {
             right_frames: 0,
             neutral: 0,
             rematch_seen: false,
+            cards_seen: false,
+            splash: 0,
+            splash_pulse: false,
         }
     }
     pub fn stage(&self) -> Stage {
@@ -273,16 +298,26 @@ impl Results {
         self.stage = stage;
         self.age = 0;
     }
+    /// Port carrying the in-flight pulse. Read it before cancelling or stepping.
+    fn lane(&self) -> Option<u8> {
+        if self.splash_pulse && !self.pulse.idle() {
+            Some(SPLASH_PORT)
+        } else {
+            self.port
+        }
+    }
     fn end(&mut self, event: Event) -> Output {
         self.go(Stage::End);
+        let port = self.lane();
         Output {
             input: self.pulse.cancel(),
-            port: self.port,
+            port,
             event: Some(event),
         }
     }
     fn press(&mut self, mask: u32, stage: Stage, event: Event) -> Output {
         self.go(stage);
+        self.splash_pulse = false;
         self.pulse.start(mask);
         Output {
             input: self.pulse.step(),
@@ -290,18 +325,32 @@ impl Results {
             event: Some(event),
         }
     }
-    fn wait(&mut self) -> Output {
+    /// A on the winner splash, before any cards sample. Restarts the Cards
+    /// deadline so the presses never eat into it.
+    fn press_splash(&mut self) -> Output {
+        self.go(Stage::Cards);
+        self.splash = self.splash.saturating_add(1);
+        self.splash_pulse = true;
+        self.pulse.start(A);
         Output {
             input: self.pulse.step(),
-            port: self.port,
+            port: Some(SPLASH_PORT),
+            event: Some(Event::SplashA(self.splash)),
+        }
+    }
+    fn wait(&mut self) -> Output {
+        let port = self.lane();
+        Output {
+            input: self.pulse.step(),
+            port,
             event: None,
         }
     }
     pub fn step(&mut self, f: Frame, settings: Settings) -> Output {
         if f.epoch != self.epoch {
             let interrupted = self.epoch != 0 && !matches!(self.stage, Stage::End | Stage::Idle);
+            let old_port = self.lane();
             let release = self.pulse.cancel();
-            let old_port = self.port;
             *self = Self {
                 epoch: f.epoch,
                 scene: f.scene,
@@ -354,6 +403,18 @@ impl Results {
         if self.port.is_some() && f.port != self.port {
             return self.end(Event::PortChanged);
         }
+        // The first cards sample of the epoch ends the splash presses for good.
+        // Stop holding an A still in flight: its release goes to its own port.
+        let first_sample = f.cards_seen && !self.cards_seen;
+        self.cards_seen |= f.cards_seen;
+        if first_sample && self.splash_pulse && !self.pulse.idle() {
+            let port = self.lane();
+            return Output {
+                input: self.pulse.cancel(),
+                port,
+                event: None,
+            };
+        }
         self.age = self.age.saturating_add(1);
         let timeout = match self.stage {
             Stage::Cards => CARDS_TIMEOUT,
@@ -369,6 +430,21 @@ impl Results {
             return self.end(Event::Timeout);
         }
         if self.port.is_none() {
+            // Offline, no cards sample yet: the winner splash is on screen.
+            let due = if self.splash == 0 {
+                SPLASH_SETTLE
+            } else {
+                SPLASH_GAP
+            };
+            if self.stage == Stage::Cards
+                && self.scene == Scene::Offline
+                && !self.cards_seen
+                && self.splash < SPLASH_MAX
+                && self.age >= due
+                && self.pulse.idle()
+            {
+                return self.press_splash();
+            }
             return self.wait();
         }
         if self.scene == Scene::Offline && f.save_status == Some(4) {
@@ -540,10 +616,21 @@ mod tests {
             epoch: 16,
             scene: Scene::Offline,
             port: Some(3),
+            cards_seen: true,
             cards_ready: true,
             save_status: Some(0),
             popup: None,
             rematch_epoch: 0,
+        }
+    }
+    /// Offline winner splash: no cards sample yet, hence no port mapping.
+    fn splash() -> Frame {
+        Frame {
+            port: None,
+            cards_seen: false,
+            cards_ready: false,
+            save_status: None,
+            ..frame()
         }
     }
     fn popup(record: u64) -> Popup {
@@ -561,6 +648,11 @@ mod tests {
     fn until(r: &mut Results, f: Frame, event: Event, limit: u16) -> Output {
         for _ in 0..limit {
             let o = r.step(f, settings());
+            // Past the cards sample every input rides the bound port.
+            assert!(!matches!(o.event, Some(Event::SplashA(_))));
+            if o.input != Input::default() {
+                assert_eq!(o.port, f.port, "{:?}", o.event);
+            }
             if o.event == Some(event) {
                 return o;
             }
@@ -896,6 +988,205 @@ mod tests {
         let mut r = Results::new();
         for _ in 0..10 {
             assert_eq!(r.step(frame(), Settings::default()).input, Input::default());
+        }
+    }
+    #[test]
+    fn splash_a_waits_the_settle_delay_then_is_one_edge_five_holds_one_release_on_port_0() {
+        let mut r = Results::new();
+        let f = splash();
+        assert_eq!(r.step(f, settings()).event, Some(Event::Begin));
+        for n in 1..SPLASH_SETTLE {
+            assert_eq!(r.step(f, settings()), Output::default(), "frame {n}");
+        }
+        let o = r.step(f, settings());
+        assert_eq!(o.event, Some(Event::SplashA(1)));
+        assert_eq!(o.port, Some(SPLASH_PORT));
+        assert_eq!(o.input.pressed, A);
+        assert_eq!(o.input.held, A);
+        for n in 1..25 {
+            let o = r.step(f, settings());
+            assert_eq!(o.event, None);
+            assert_eq!(o.input.pressed, 0);
+            assert_eq!(o.input.held, if n < 6 { A } else { 0 });
+            assert_eq!(o.input.released, if n == 6 { A } else { 0 });
+            if o.input != Input::default() {
+                assert_eq!(o.port, Some(SPLASH_PORT));
+            }
+        }
+    }
+    #[test]
+    fn splash_a_repeats_every_gap_at_most_three_times_and_the_deadline_restarts_at_the_last() {
+        let mut r = Results::new();
+        let f = splash();
+        r.step(f, settings());
+        let mut presses = Vec::new();
+        let mut timeout = None;
+        for n in 1..=4000u32 {
+            let o = r.step(f, settings());
+            if o.input != Input::default() {
+                assert_eq!(o.port, Some(SPLASH_PORT));
+            }
+            if o.input.pressed != 0 {
+                assert_eq!(o.input.pressed, A);
+                presses.push(n);
+                assert_eq!(o.event, Some(Event::SplashA(presses.len() as u8)));
+            }
+            if o.event == Some(Event::Timeout) {
+                timeout = Some(n);
+                break;
+            }
+        }
+        let first = u32::from(SPLASH_SETTLE);
+        let gap = u32::from(SPLASH_GAP);
+        assert_eq!(presses, [first, first + gap, first + 2 * gap]);
+        assert_eq!(presses.len(), usize::from(SPLASH_MAX));
+        assert_eq!(timeout, Some(presses[2] + u32::from(CARDS_TIMEOUT)));
+        // Terminal: nothing more in this epoch.
+        for _ in 0..500 {
+            assert_eq!(r.step(f, settings()), Output::default());
+        }
+    }
+    #[test]
+    fn no_splash_a_once_any_cards_sample_exists_even_an_unready_or_portless_one() {
+        // (A presses before the sample, the sample's port).
+        for (before, port) in [(0, Some(3)), (1, Some(3)), (2, Some(3)), (1, None)] {
+            let mut r = Results::new();
+            let mut f = splash();
+            r.step(f, settings());
+            let mut presses = 0;
+            while presses < before {
+                presses += u8::from(r.step(f, settings()).input.pressed == A);
+            }
+            f.cards_seen = true;
+            f.port = port;
+            let mut timed_out = false;
+            for _ in 0..(CARDS_TIMEOUT + 4 * SPLASH_GAP) {
+                let o = r.step(f, settings());
+                assert_eq!(o.input.pressed, 0, "before={before} port={port:?}");
+                timed_out |= o.event == Some(Event::Timeout);
+            }
+            assert!(timed_out);
+            assert_eq!(r.splash, before);
+        }
+    }
+    #[test]
+    fn a_splash_a_in_flight_is_released_on_its_own_port_when_cards_arrive() {
+        let mut r = Results::new();
+        let mut f = splash();
+        r.step(f, settings());
+        while r.step(f, settings()).input.pressed != A {}
+        for _ in 0..2 {
+            let o = r.step(f, settings());
+            assert_eq!((o.input.held, o.port), (A, Some(SPLASH_PORT)));
+        }
+        f.cards_seen = true;
+        f.port = Some(3);
+        let o = r.step(f, settings());
+        assert_eq!(o.input.held, 0);
+        assert_eq!(o.input.pressed, 0);
+        assert_eq!(o.input.released, A);
+        assert_eq!(o.port, Some(SPLASH_PORT));
+        // The cards port was bound on that frame; nothing is held on any port.
+        f.cards_ready = true;
+        f.save_status = Some(0);
+        let o = r.step(f, settings());
+        assert_eq!(o.event, Some(Event::SaveY));
+        assert_eq!(o.port, Some(3));
+        // A new epoch (or a lost epoch) releases a live splash A on port 0.
+        let mut r = Results::new();
+        let mut f = splash();
+        r.step(f, settings());
+        while r.step(f, settings()).input.pressed != A {}
+        r.step(f, settings());
+        f.epoch = 0;
+        let o = r.step(f, settings());
+        assert_eq!((o.input.released, o.port), (A, Some(SPLASH_PORT)));
+    }
+    #[test]
+    fn splash_a_never_presses_in_training_playback_unsupported_online_or_save_off() {
+        let steps = SPLASH_SETTLE + 4 * SPLASH_GAP;
+        // (melee, mode): Training, replay playback, unknown family, nothing.
+        for (melee, mode) in [(0x0d, 0x0201_0000), (0, 0x0501_0100), (0x20, 0x0404_0000), (0, 0)] {
+            let mut r = Results::new();
+            let f = Frame {
+                scene: scene(true, melee, mode),
+                ..splash()
+            };
+            assert_ne!(f.scene, Scene::Offline);
+            for _ in 0..steps {
+                assert_eq!(r.step(f, settings()).input, Input::default());
+            }
+        }
+        // Online has its own rematch flow: no popup, no press, no splash event.
+        let mut r = Results::new();
+        let f = Frame {
+            scene: Scene::Online,
+            port: Some(0),
+            ..splash()
+        };
+        for _ in 0..steps {
+            let o = r.step(f, settings());
+            assert_eq!(o.input, Input::default());
+            assert!(!matches!(o.event, Some(Event::SplashA(_))));
+        }
+        // auto_save_replay off from the start, and turned off mid-epoch.
+        let off = Settings {
+            auto_save_replay: false,
+            ..settings()
+        };
+        let mut r = Results::new();
+        for _ in 0..steps {
+            assert_eq!(r.step(splash(), off).input, Input::default());
+        }
+        let mut r = Results::new();
+        for _ in 0..SPLASH_SETTLE - 10 {
+            r.step(splash(), settings());
+        }
+        assert_eq!(r.step(splash(), off).event, Some(Event::Cancelled));
+        for _ in 0..steps {
+            assert_eq!(r.step(splash(), settings()), Output::default());
+        }
+    }
+    #[test]
+    fn full_save_sequence_still_completes_when_cards_arrive_after_the_second_a() {
+        let mut r = Results::new();
+        let mut f = splash();
+        r.step(f, settings());
+        let mut presses = 0;
+        for _ in 0..(SPLASH_SETTLE + SPLASH_GAP + 20) {
+            let o = r.step(f, settings());
+            if o.input.pressed == A {
+                presses += 1;
+                assert_eq!(o.port, Some(SPLASH_PORT));
+            }
+        }
+        assert_eq!(presses, 2);
+        // Cards appear: ready on the very first sample, with P1's real port.
+        f.cards_seen = true;
+        f.cards_ready = true;
+        f.port = Some(3);
+        f.save_status = Some(0);
+        let o = r.step(f, settings());
+        assert_eq!(o.event, Some(Event::SaveY));
+        assert_eq!((o.input.pressed, o.port), (Y, Some(3)));
+        f.save_status = Some(1);
+        f.popup = Some(popup(SAVE_RECORD));
+        until(&mut r, f, Event::SaveRight, 30);
+        f.popup.as_mut().unwrap().cursor = 2;
+        until(&mut r, f, Event::SaveConfirm, 15);
+        f.save_status = Some(2);
+        f.popup = None;
+        assert_eq!(r.step(f, settings()).event, Some(Event::Saving));
+        f.save_status = Some(3);
+        f.popup = Some(popup(SUCCESS_RECORD));
+        until(&mut r, f, Event::SaveClose, 30);
+        f.save_status = Some(5);
+        assert_eq!(r.step(f, settings()).event, Some(Event::Saved));
+        assert_eq!(r.splash, 2);
+        f.save_status = Some(0);
+        f.popup = None;
+        for _ in 0..(3 * SPLASH_GAP + 500) {
+            assert_eq!(r.step(f, settings()), Output::default());
         }
     }
 }

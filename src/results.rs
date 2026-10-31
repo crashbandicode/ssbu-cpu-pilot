@@ -162,8 +162,12 @@ pub unsafe fn frame(records: *mut [policy::Record; 10], settings: Settings) {
             read::<u8>(base() + ssbu_cpu_pilot_core::native::offsets::MELEE_MODE),
             read(base() + ssbu_cpu_pilot_core::native::offsets::GAME_MODE),
         );
-        let fresh_cards = s.cards_epoch == e && s.frame.wrapping_sub(s.cards_frame) <= 1;
-        // Local Smash maps fighter-entry 0 through the game's port table.
+        // Any cards sample taken in this epoch, ready or not, however stale.
+        let cards_seen = e != 0 && s.cards_epoch == e;
+        let fresh_cards = cards_seen && s.frame.wrapping_sub(s.cards_frame) <= 1;
+        // Local Smash maps fighter-entry 0 through the game's port table, which
+        // is only sampled with the cards: before them (the winner splash) the
+        // port is None and the core presses its splash A on UI port 0 itself.
         // Use only the first local online UI port, as in the supplied adapter.
         // Native popup acceptance of this port still needs runtime qualification.
         let port = if scene == policy::Scene::Online {
@@ -177,6 +181,7 @@ pub unsafe fn frame(records: *mut [policy::Record; 10], settings: Settings) {
             epoch: e,
             scene,
             port,
+            cards_seen,
             cards_ready: fresh_cards && s.cards_ready,
             save_status: if e != 0 { status() } else { None },
             popup: if e != 0 { popup() } else { None },
@@ -190,10 +195,16 @@ pub unsafe fn frame(records: *mut [policy::Record; 10], settings: Settings) {
         }
         #[cfg(feature = "diag")]
         if let Some(event) = out.event {
+            // The splash A rides UI port 0 before any port is mapped.
+            let shown = if matches!(event, policy::Event::SplashA(_)) {
+                out.port
+            } else {
+                port
+            };
             runtime::diag_event(format_args!(
                 "results epoch={:#x} port={} {} step={:?} status={} popup={:#x} phase={} cursor={} mode={:#x}",
                 if e == 0 { s.last_epoch } else { e },
-                port.unwrap_or(255),
+                shown.unwrap_or(255),
                 event_name(event),
                 step,
                 seen.save_status.unwrap_or(-1),
@@ -214,6 +225,10 @@ fn event_name(event: policy::Event) -> &'static str {
         Begin => "epoch=begin",
         SaveSkippedOnline => "save=skipped_online",
         Unsupported => "flow=unsupported",
+        // Static text keeps the diag path free of allocation; n is at most 3.
+        SplashA(1) => "save=press_a_splash n=1",
+        SplashA(2) => "save=press_a_splash n=2",
+        SplashA(_) => "save=press_a_splash n=3",
         SaveY => "save=press_y",
         SaveRight => "save=select_yes",
         SaveConfirm => "save=confirm",
