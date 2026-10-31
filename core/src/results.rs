@@ -15,10 +15,13 @@ pub const CARDS_TIMEOUT: u16 = 1200;
 /// advances alone (Eden c17: unchanged for 28 s; c14: the cards appeared only
 /// after A presses). First A this many frames after epoch begin, then one every
 /// `SPLASH_GAP` frames, at most `SPLASH_MAX` per epoch, and none once any cards
-/// sample (ready or not) for the epoch exists.
+/// sample (ready or not) for the epoch exists. Eden c18: three presses at
+/// +2.3..4.3 s all landed during the loading gear and the winner's intro; the
+/// splash only accepted input from about +5 s, so the presses keep coming
+/// (about once a second) for long enough to cover a slow intro.
 pub const SPLASH_SETTLE: u16 = 90;
 pub const SPLASH_GAP: u16 = 60;
-pub const SPLASH_MAX: u8 = 3;
+pub const SPLASH_MAX: u8 = 12;
 /// Before the cards sample there is no fighter-entry port mapping. The splash A
 /// goes to UI port 0 (P1's controller): an assumption Eden must confirm.
 pub const SPLASH_PORT: u8 = 0;
@@ -1015,7 +1018,7 @@ mod tests {
         }
     }
     #[test]
-    fn splash_a_repeats_every_gap_at_most_three_times_and_the_deadline_restarts_at_the_last() {
+    fn splash_a_repeats_every_gap_at_most_splash_max_times_and_the_deadline_restarts_at_the_last() {
         let mut r = Results::new();
         let f = splash();
         r.step(f, settings());
@@ -1038,9 +1041,11 @@ mod tests {
         }
         let first = u32::from(SPLASH_SETTLE);
         let gap = u32::from(SPLASH_GAP);
-        assert_eq!(presses, [first, first + gap, first + 2 * gap]);
+        let expected: Vec<u32> = (0..u32::from(SPLASH_MAX)).map(|k| first + k * gap).collect();
+        assert_eq!(presses, expected);
         assert_eq!(presses.len(), usize::from(SPLASH_MAX));
-        assert_eq!(timeout, Some(presses[2] + u32::from(CARDS_TIMEOUT)));
+        let last = *presses.last().unwrap();
+        assert_eq!(timeout, Some(last + u32::from(CARDS_TIMEOUT)));
         // Terminal: nothing more in this epoch.
         for _ in 0..500 {
             assert_eq!(r.step(f, settings()), Output::default());

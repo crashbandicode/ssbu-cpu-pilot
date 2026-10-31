@@ -225,10 +225,25 @@ fn event_name(event: policy::Event) -> &'static str {
         Begin => "epoch=begin",
         SaveSkippedOnline => "save=skipped_online",
         Unsupported => "flow=unsupported",
-        // Static text keeps the diag path free of allocation; n is at most 3.
-        SplashA(1) => "save=press_a_splash n=1",
-        SplashA(2) => "save=press_a_splash n=2",
-        SplashA(_) => "save=press_a_splash n=3",
+        // Static text keeps the diag path free of allocation; n is 1..=SPLASH_MAX.
+        SplashA(n) => {
+            const NAMES: [&str; 12] = [
+                "save=press_a_splash n=1",
+                "save=press_a_splash n=2",
+                "save=press_a_splash n=3",
+                "save=press_a_splash n=4",
+                "save=press_a_splash n=5",
+                "save=press_a_splash n=6",
+                "save=press_a_splash n=7",
+                "save=press_a_splash n=8",
+                "save=press_a_splash n=9",
+                "save=press_a_splash n=10",
+                "save=press_a_splash n=11",
+                "save=press_a_splash n=12",
+            ];
+            const _: () = assert!(NAMES.len() == policy::SPLASH_MAX as usize);
+            NAMES[usize::from(n.clamp(1, policy::SPLASH_MAX)) - 1]
+        }
         SaveY => "save=press_y",
         SaveRight => "save=select_yes",
         SaveConfirm => "save=confirm",

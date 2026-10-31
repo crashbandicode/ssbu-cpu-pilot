@@ -133,7 +133,7 @@ Offline rematch is omitted because CSS/stage/start signals were not proven.
 
 Diagnostics emit transition lines with this literal format (numbers vary):
 `results epoch=0x... port=N TOKEN step=STAGE status=N popup=0x... phase=N cursor=N mode=0x...`.
-Offline, zero to three `save=press_a_splash n=1..3` lines (port=0) may precede the
+Offline, zero to twelve `save=press_a_splash n=1..12` lines (port=0) may precede the
 save tokens, and none follows `save=press_y`. For a save, require in order `save=press_y`, `save=select_yes`, `save=confirm`,
 `save=writing`, `save=close_success`, `save=completed` with final status=5.
 Online require `save=skipped_online` when enabled, then `rematch=press_a`
