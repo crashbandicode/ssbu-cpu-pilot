@@ -158,8 +158,9 @@ pub unsafe fn frame(records: *mut [policy::Record; 10], settings: Settings) {
             s.cards_epoch = 0;
         }
         let scene = policy::scene(
-            read::<u8>(base() + 0x53144d8) & 1 != 0,
-            read(base() + 0x53050f0),
+            read::<u8>(base() + ssbu_cpu_pilot_core::native::offsets::MODE_INITIALIZED) & 1 != 0,
+            read::<u8>(base() + ssbu_cpu_pilot_core::native::offsets::MELEE_MODE),
+            read(base() + ssbu_cpu_pilot_core::native::offsets::GAME_MODE),
         );
         let fresh_cards = s.cards_epoch == e && s.frame.wrapping_sub(s.cards_frame) <= 1;
         // Local Smash maps fighter-entry 0 through the game's port table.

@@ -22,16 +22,29 @@ pub enum Scene {
     Unsupported,
 }
 
-/// Allow only the local-Smash family used by the supplied replay guard fixture.
-/// Its value during native results still requires runtime qualification.
-/// All Online menu families skip saving, including unsupported rematch modes.
-pub fn scene(initialized: bool, mode: u32) -> Scene {
+/// Training (`melee 0x0d`) shares the game mode `0x0201xxxx` with local Smash.
+pub const MELEE_TRAINING: u8 = 0x0d;
+/// Online battles (`melee 0x0e`).
+pub const MELEE_ONLINE: u8 = 0x0e;
+/// Replay playback (with melee 0).
+pub const MODE_PLAYBACK: u32 = 0x0501_0100;
+
+/// Local Smash is the `0x0201xxxx` mode family outside Training: Eden c14
+/// (2026-10-31) read `0x02010000` at local Smash results. Online families
+/// (`0x07xxxxxx` or melee `0x0e`) are online; everything else, replay
+/// playback and Training included, is unsupported and never pressed.
+pub fn scene(initialized: bool, melee: u8, mode: u32) -> Scene {
     if !initialized {
         return Scene::Unsupported;
     }
-    match mode & 0x7fff_0000 {
-        0x0101_0000 => Scene::Offline,
-        m if m >> 24 == 7 => Scene::Online,
+    if melee == MELEE_ONLINE || mode >> 24 == 7 {
+        return Scene::Online;
+    }
+    if melee == MELEE_TRAINING || mode == MODE_PLAYBACK {
+        return Scene::Unsupported;
+    }
+    match mode & 0xffff_0000 {
+        0x0201_0000 => Scene::Offline,
         _ => Scene::Unsupported,
     }
 }
@@ -863,19 +876,23 @@ mod tests {
     }
     #[test]
     fn settings_off_and_unknown_playback_training_modes_never_press() {
-        for mode in [0, 0x05010100, 0x04040000, 0x02010000] {
+        // (melee, mode): nothing, replay playback, an unknown family, Training.
+        for (melee, mode) in [(0, 0), (0, 0x05010100), (0x20, 0x04040000), (0x0d, 0x02010000)] {
             let mut r = Results::new();
             let f = Frame {
-                scene: scene(true, mode),
+                scene: scene(true, melee, mode),
                 ..frame()
             };
             for _ in 0..10 {
                 assert_eq!(r.step(f, settings()).input, Input::default());
             }
         }
-        assert_eq!(scene(false, 0x01010000), Scene::Unsupported);
-        assert_eq!(scene(true, 0x01010000), Scene::Offline);
-        assert_eq!(scene(true, 0x07010101), Scene::Online);
+        assert_eq!(scene(false, 0, 0x02010000), Scene::Unsupported);
+        // Local Smash results (Eden c14) and the earlier unproven family.
+        assert_eq!(scene(true, 0, 0x02010000), Scene::Offline);
+        assert_eq!(scene(true, 0, 0x01010000), Scene::Unsupported);
+        assert_eq!(scene(true, 0x0e, 0x07010101), Scene::Online);
+        assert_eq!(scene(true, 0, 0x07010000), Scene::Online);
         let mut r = Results::new();
         for _ in 0..10 {
             assert_eq!(r.step(frame(), Settings::default()).input, Input::default());

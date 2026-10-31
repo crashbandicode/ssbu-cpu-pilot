@@ -210,6 +210,13 @@ unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8) {
     }
     let wanted = SETTINGS.load();
     let seen = online_runtime::observe(slot);
+    if STALE.swap(false, Ordering::AcqRel) {
+        // The battle the session was armed in ended (see `watch_battle_end`):
+        // release on the objects only if they are still the armed ones, and
+        // start this battle's session afresh.
+        release(p, seen.native);
+        p.session = Session::new();
+    }
     let same = match (p.armed, seen.native) {
         (Some(a), Some(n)) => a.ctrl == n.ctrl && a.ai == n.ai,
         (Some(_), None) => false,
@@ -303,7 +310,29 @@ unsafe extern "C" fn fim_exit(ctx: &mut InlineCtx) {
         0
     };
     diag_count();
+    LAST_PILOT_TICK.store(tick(), Ordering::Release);
     pilot_frame(out as *mut MappedInputs, raw, slot as u8);
+}
+
+/// Final input mapping runs only in battle, so the pilot never sees the
+/// battle end. The worker clears the armed state once these calls have
+/// stopped for a second (results, menus, scene change); the next battle
+/// frame then releases the session on whatever objects are live.
+static LAST_PILOT_TICK: AtomicU64 = AtomicU64::new(0);
+static STALE: AtomicBool = AtomicBool::new(false);
+/// One second of `nn::os` ticks (19.2 MHz).
+const STALE_TICKS: u64 = 19_200_000;
+
+fn watch_battle_end() {
+    if ARMED_LEVEL.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let last = LAST_PILOT_TICK.load(Ordering::Acquire);
+    if tick().saturating_sub(last) > STALE_TICKS {
+        ARMED_LEVEL.store(0, Ordering::Release);
+        STALE.store(true, Ordering::Release);
+        diag_event(format_args!("stale no_battle_frames armed_cleared=1"));
+    }
 }
 
 /// Completed UI port array (0x3762ec0 single exit). x22 advanced by
@@ -831,6 +860,7 @@ extern "C" fn worker_main(_: *mut skyline::libc::c_void) {
         if DIRTY.swap(false, Ordering::AcqRel) {
             save_settings();
         }
+        watch_battle_end();
         #[cfg(feature = "diag")]
         {
             round = round.wrapping_add(1);
