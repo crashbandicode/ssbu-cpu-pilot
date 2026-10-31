@@ -29,6 +29,12 @@ pub const DIALOG_TIMEOUT: u16 = 180;
 pub const SAVE_TIMEOUT: u16 = 900;
 pub const CLOSE_TIMEOUT: u16 = 480;
 pub const ANSWER_TIMEOUT: u16 = 360;
+/// Online, from epoch begin to a ready "Rematch?" pop-up. Eden r01
+/// (2026-10-31): the winner splash ran about 15 s before the pop-up, while
+/// 480 frames lasted about 8.5 s, so the step expired before the pop-up. The
+/// pop-up's own countdown is about 10 s; 2400 frames (about 40 s at the
+/// measured callback rate) covers the splash and the countdown.
+pub const REMATCH_WAIT: u16 = 2400;
 pub const REMATCH_SETTLE: u32 = 36;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -424,7 +430,7 @@ impl Results {
             Stage::SaveDialog | Stage::SelectYes | Stage::Confirm => DIALOG_TIMEOUT,
             Stage::Saving => SAVE_TIMEOUT,
             Stage::Close => CLOSE_TIMEOUT,
-            Stage::Rematch => CLOSE_TIMEOUT,
+            Stage::Rematch => REMATCH_WAIT,
             Stage::Answer => ANSWER_TIMEOUT,
             _ => 0,
         };
@@ -758,7 +764,8 @@ mod tests {
             r.age = match stage {
                 Stage::Cards => CARDS_TIMEOUT,
                 Stage::Saving => SAVE_TIMEOUT,
-                Stage::Close | Stage::Rematch => CLOSE_TIMEOUT,
+                Stage::Close => CLOSE_TIMEOUT,
+                Stage::Rematch => REMATCH_WAIT,
                 Stage::Answer => ANSWER_TIMEOUT,
                 _ => DIALOG_TIMEOUT,
             } - 1;
@@ -819,6 +826,29 @@ mod tests {
         f.popup = Some(popup(SUCCESS_RECORD));
         assert_eq!(r.step(f, settings()).event, Some(Event::UnexpectedStatus));
     }
+    #[test]
+    fn rematch_waits_through_a_long_online_splash() {
+        // Eden r01: the pop-up came about 15 s after epoch begin, past the
+        // old 480-frame deadline; it must still be answered at frame 1300.
+        let (mut r, mut f) = begin();
+        r.scene = Scene::Online;
+        r.save = false;
+        r.stage = Stage::Rematch;
+        f.scene = Scene::Online;
+        for _ in 0..1300 {
+            let o = r.step(f, settings());
+            assert_eq!(o.event, None);
+            assert_eq!(o.input.pressed, 0);
+        }
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(Popup {
+            age: REMATCH_SETTLE,
+            ..popup(REMATCH_RECORD)
+        });
+        let o = r.step(f, settings());
+        assert_eq!((o.input.pressed, o.event), (A, Some(Event::RematchA)));
+    }
+
     #[test]
     fn online_save_is_skipped_and_rematch_gets_one_a_at_ready_age_36() {
         let mut r = Results::new();
