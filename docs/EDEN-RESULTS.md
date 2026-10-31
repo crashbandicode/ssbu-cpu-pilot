@@ -189,6 +189,27 @@ meter off, `p1=cpu level=9 auto_rematch=on`; the Yoga answered by hand.
   `epoch=begin` line still showed match 1's pop-up record; it did not cause a
   press (the step acts only on a pop-up parsed in its own epoch).
 
+### Training Modpack branch using this library (k01, k02)
+
+Fork branch `cpu-pilot-lib` at `c840b20` (`ssbu-cpu-pilot-core` rev `0162eed`,
+`--features enhancements-alpha`, NRO sha256 `18db25e2…596e`), on the Surface
+with `libnro_hook.nro`, `libparam_hook.nro` and the tile cursor; the fork's
+`[CpuPilot]` lines are in `sd:/ultimate/TrainingModpack/practice-diagnostics.log`.
+
+- **k01, the fork alone, pass.** `[CpuPilot] offline_probe_ready` at boot; the
+  modpack menu's Misc tab, "P1 CPU Control" On and level 9: `menu_control
+  event=armed level=9 rank=100 … slot: 0 …`; P1 acted with no host input (the
+  opponent from 67.4% to 86.3% in 5 s); Off: `menu_control event=menu_off …
+  rank_restore_attempted=Some(true)`, and the host stick reached P1 again.
+- **k02, the fork with this plugin (`582f5c2`), pass.** The fork logged
+  `[CpuPilot] standalone_pilot_present ssbu_cpu_pilot_state_v1=0x871398450;
+  fork pilot hooks not installed` and no `offline_probe_ready`; this plugin:
+  `result=installed heap_allocations=0 menu=host_missing`. The fork's menu On
+  drove nothing (P1 idle, no fork line in 10 s); `p1=cpu` here: `arm level=9
+  rank=100 old_rank=100 slot=0`, "CPU Lv9" on the tag, P1 fighting; `p1=player`:
+  `release restored=true`, the host stick moving P1.
+
+Both runs: 0 panic/abort/crash in `console.log`.
+
 **Not yet run in Eden:** the smash-gamepad-overlay bridge (a branch of that
-repo), the Training Modpack branch that uses this library, a replay A/B with
-the detector.
+repo), a replay A/B with the detector.
