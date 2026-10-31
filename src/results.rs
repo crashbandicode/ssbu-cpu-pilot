@@ -1,0 +1,365 @@
+//! Switch results adapter. Three post-prologue inline sites: completed UI
+//! records, a borrowed cards snapshot, and the shared online-rematch parse.
+//! All policy advances on the UI-builder callback. No native calls, popup
+//! writes, replay-commit hooks, or retained/dereferenced cards pointers.
+use crate::{chain, model, runtime, share};
+use core::cell::UnsafeCell;
+use core::fmt::Write;
+use skyline::hooks::{getRegionAddress, InlineCtx, Region};
+use skyline::nn;
+use ssbu_cpu_pilot_core::{results as policy, settings::Settings};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+
+static ENABLED: AtomicBool = AtomicBool::new(false);
+static BUSY: AtomicBool = AtomicBool::new(false);
+struct Owned<T>(UnsafeCell<T>);
+// All accesses take BUSY; callbacks never block the UI thread.
+unsafe impl<T> Sync for Owned<T> {}
+struct State {
+    flow: policy::Results,
+    frame: u64,
+    cards_epoch: usize,
+    cards_frame: u64,
+    cards_ready: bool,
+    cards_port: Option<u8>,
+    rematch_epoch: usize,
+    last_epoch: usize,
+}
+static STATE: Owned<State> = Owned(UnsafeCell::new(State {
+    flow: policy::Results::new(),
+    frame: 0,
+    cards_epoch: 0,
+    cards_frame: 0,
+    cards_ready: false,
+    cards_port: None,
+    rematch_epoch: 0,
+    last_epoch: 0,
+}));
+
+fn with_state(f: impl FnOnce(&mut State)) {
+    if BUSY
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    f(unsafe { &mut *STATE.0.get() });
+    BUSY.store(false, Ordering::Release);
+}
+
+fn base() -> usize {
+    unsafe { getRegionAddress(Region::Text) as usize }
+}
+unsafe fn read<T: Copy>(at: usize) -> T {
+    (at as *const T).read_volatile()
+}
+unsafe fn pointer(at: usize) -> Option<usize> {
+    if at == 0 || at % 8 != 0 {
+        return None;
+    }
+    let p = read::<usize>(at);
+    (p != 0 && p % 8 == 0).then_some(p)
+}
+unsafe fn singleton(offset: usize) -> Option<usize> {
+    pointer(pointer(base() + offset)? + 8)
+}
+unsafe fn pending(obj: usize) -> Option<i32> {
+    let index = read::<i32>(obj + 0xf4);
+    (0..19)
+        .contains(&index)
+        .then(|| read::<i32>(obj + 0xa8 + index as usize * 4))
+}
+unsafe fn epoch() -> usize {
+    singleton(0x52c35d0).unwrap_or(0)
+}
+unsafe fn status() -> Option<i32> {
+    singleton(0x52c35c8).map(|p| read(p + 0x10))
+}
+
+unsafe fn popup() -> Option<policy::Popup> {
+    let wrapper = pointer(base() + 0x532f820)?;
+    let p = pointer(wrapper + 8)?;
+    let d = pointer(wrapper + 0x10)?;
+    let ui = pointer(pointer(p + 0x110)? + 0x80)?;
+    let selection = pointer(ui + 0xd8)?;
+    Some(policy::Popup {
+        record: read(d + 0x198),
+        phase: read(p + 0xf8),
+        pending: pending(p)?,
+        age: read::<i32>(p + 0xfc).max(0) as u32,
+        result: read(p + 0x118),
+        decided: read::<u8>(ui + 0x14d) != 0,
+        opening: read::<u8>(p + 0x142) != 0,
+        default_button: read(d + 0x160),
+        cancel: read(d + 0x16c),
+        input_mode: read(d + 0x170),
+        cursor: read(selection + 0x250),
+    })
+}
+
+/// x19 is borrowed only here, while the native cards callback owns it.
+unsafe extern "C" fn cards(ctx: &mut InlineCtx) {
+    if !ENABLED.load(Ordering::Acquire) {
+        return;
+    }
+    let c = ctx.registers[19].x() as usize;
+    if c == 0 || c % 8 != 0 {
+        return;
+    }
+    let e = epoch();
+    if e == 0 {
+        return;
+    }
+    let port = pointer(base() + 0x52c50f0).and_then(|p| {
+        let port = read::<i32>(p + 0x298); // fighter-entry 0 -> UI port
+        (0..10).contains(&port).then_some(port as u8)
+    });
+    let idle = singleton(0x532f820)
+        .is_some_and(|p| read::<i32>(p + 0xf8) == 0 && read::<u8>(p + 0x142) == 0);
+    let ready = read::<i32>(c + 0xf8) == 2
+        && pending(c) == Some(2)
+        && read::<u8>(c + 0x924) == 0
+        && read::<u8>(c + 0x930) == 1
+        && status() == Some(0)
+        && idle
+        && singleton(0x593b988).is_some_and(|p| read::<u32>(p) <= 1);
+    with_state(|s| {
+        s.cards_epoch = e;
+        s.cards_frame = s.frame;
+        s.cards_ready = ready;
+        s.cards_port = port;
+    });
+}
+
+/// Shared callback is an observer. It never reparses, writes registers, or
+/// treats elite-rematch's rewritten Elite notice as the ordinary record.
+unsafe extern "C" fn parsed(ctx: &mut InlineCtx) {
+    let wrapper = ctx.registers[19].x() as usize;
+    if pointer(base() + 0x532f820) != Some(wrapper) {
+        return;
+    }
+    let e = epoch();
+    let qualified = ctx.registers[20].x() == policy::REMATCH_RECORD;
+    with_state(|s| {
+        s.rematch_epoch = if qualified { e } else { 0 };
+    });
+}
+
+/// Called from runtime's UI exit hook, after all ten records were rebuilt.
+pub unsafe fn frame(records: *mut [policy::Record; 10], settings: Settings) {
+    if !ENABLED.load(Ordering::Acquire) || records.is_null() || records as usize % 4 != 0 {
+        return;
+    }
+    with_state(|s| {
+        s.frame = s.frame.wrapping_add(1);
+        let e = epoch();
+        if e == 0 {
+            s.rematch_epoch = 0;
+            s.cards_epoch = 0;
+        }
+        let scene = policy::scene(
+            read::<u8>(base() + 0x53144d8) & 1 != 0,
+            read(base() + 0x53050f0),
+        );
+        let fresh_cards = s.cards_epoch == e && s.frame.wrapping_sub(s.cards_frame) <= 1;
+        // Local Smash maps fighter-entry 0 through the game's port table.
+        // Use only the first local online UI port, as in the supplied adapter.
+        // Native popup acceptance of this port still needs runtime qualification.
+        let port = if scene == policy::Scene::Online {
+            Some(0)
+        } else if s.cards_epoch == e {
+            s.cards_port
+        } else {
+            None
+        };
+        let seen = policy::Frame {
+            epoch: e,
+            scene,
+            port,
+            cards_ready: fresh_cards && s.cards_ready,
+            save_status: if e != 0 { status() } else { None },
+            popup: if e != 0 { popup() } else { None },
+            rematch_epoch: s.rematch_epoch,
+        };
+        #[cfg(feature = "diag")]
+        let step = s.flow.stage();
+        let out = s.flow.step(seen, settings);
+        if let Some(port) = out.port {
+            out.input.apply(&mut *records, port);
+        }
+        #[cfg(feature = "diag")]
+        if let Some(event) = out.event {
+            runtime::diag_event(format_args!(
+                "results epoch={:#x} port={} {} step={:?} status={} popup={:#x} phase={} cursor={} mode={:#x}",
+                if e == 0 { s.last_epoch } else { e },
+                port.unwrap_or(255),
+                event_name(event),
+                step,
+                seen.save_status.unwrap_or(-1),
+                seen.popup.map_or(0, |p| p.record),
+                seen.popup.map_or(-1, |p| p.phase),
+                seen.popup.map_or(-1, |p| p.cursor),
+                read::<u32>(base() + 0x53050f0)
+            ));
+        }
+        s.last_epoch = e;
+    });
+}
+
+#[cfg(feature = "diag")]
+fn event_name(event: policy::Event) -> &'static str {
+    use policy::Event::*;
+    match event {
+        Begin => "epoch=begin",
+        SaveSkippedOnline => "save=skipped_online",
+        Unsupported => "flow=unsupported",
+        SaveY => "save=press_y",
+        SaveRight => "save=select_yes",
+        SaveConfirm => "save=confirm",
+        Saving => "save=writing",
+        SaveClose => "save=close_success",
+        Saved => "save=completed",
+        RematchA => "rematch=press_a",
+        RematchYes => "rematch=accepted",
+        Timeout => "flow=timeout",
+        FailedStatus => "save=failed_status_4",
+        UnexpectedStatus => "save=unexpected_status",
+        LostPopup => "flow=lost_popup",
+        WrongAnswer => "flow=wrong_answer",
+        Cancelled => "flow=cancelled",
+        SceneChanged => "flow=scene_changed",
+        PortChanged => "flow=port_changed",
+    }
+}
+
+// Shared rematch site owns its own far-chain stub. The existing pilot's sole
+// chain::hook::inline stub must never be reused for a second site's far jump.
+static REMATCH_TARGET: AtomicU64 = AtomicU64::new(0);
+extern "C" {
+    fn ssbu_results_rematch_stub();
+}
+core::arch::global_asm!(
+    ".pushsection .text.ssbu_results_rematch_stub, \"ax\", %progbits",
+    ".balign 16", ".hidden ssbu_results_rematch_stub",
+    ".global ssbu_results_rematch_stub", "ssbu_results_rematch_stub:",
+    "nop", "nop", "nop", "nop", "nop",
+    "adrp x17, {target}", "ldr x17, [x17, #:lo12:{target}]", "br x17",
+    ".popsection", target = sym REMATCH_TARGET,
+);
+static GUESTS: share::Callbacks = share::Callbacks::new();
+static SHARE_STATE: AtomicU8 = AtomicU8::new(0);
+static TABLE: share::SiteShareV1 = share::SiteShareV1 {
+    abi_version: share::ABI_VERSION,
+    offset: model::RESULTS_REMATCH.offset as u64,
+    register,
+};
+#[no_mangle]
+pub extern "C" fn ssbu_inline_site_147fb64_v1() -> *const share::SiteShareV1 {
+    &TABLE
+}
+
+unsafe extern "C" fn register(callback: usize) -> bool {
+    let usable = match SHARE_STATE.load(Ordering::Acquire) {
+        0 => {
+            runtime::version_is_supported()
+                && runtime::site_address(&model::RESULTS_REMATCH).is_some_and(|a| {
+                    chain::entry(
+                        &model::RESULTS_REMATCH.stock(),
+                        &chain::hook::words_at(a),
+                        a,
+                    ) != chain::Entry::Foreign
+                })
+        }
+        state => state == 1,
+    };
+    usable && GUESTS.push(callback)
+}
+unsafe extern "C" fn owner(ctx: &mut InlineCtx) {
+    parsed(ctx);
+    GUESTS.for_each(|address| {
+        let callback: unsafe extern "C" fn(*mut InlineCtx) = core::mem::transmute(address);
+        callback(ctx);
+    });
+}
+unsafe fn shared(report: &mut impl Write) -> bool {
+    let mut export = 0usize;
+    nn::ro::LookupSymbol(&mut export, b"ssbu_inline_site_147fb64_v1\0".as_ptr());
+    let found = if export == 0 {
+        0
+    } else {
+        let export: extern "C" fn() -> *const share::SiteShareV1 = core::mem::transmute(export);
+        export() as usize
+    };
+    // Election precedes byte checking: the owner may already have patched it.
+    match share::role(found, &TABLE as *const _ as usize) {
+        share::Role::Guest(table) => {
+            SHARE_STATE.store(2, Ordering::Release);
+            let api = &*(table as *const share::SiteShareV1);
+            let ok = share::compatible(api, model::RESULTS_REMATCH.offset)
+                && (api.register)(parsed as *const () as usize);
+            let _ = write!(
+                report,
+                " results_rematch={}",
+                if ok { "guest" } else { "refused" }
+            );
+            ok
+        }
+        share::Role::Owner => {
+            let (entry, outcome) = match runtime::site_address(&model::RESULTS_REMATCH) {
+                Some(a) => chain::hook::inline_with_stub(
+                    a,
+                    &model::RESULTS_REMATCH.stock(),
+                    owner,
+                    ssbu_results_rematch_stub as *const () as usize as u64,
+                    &REMATCH_TARGET,
+                ),
+                None => (chain::Entry::Foreign, chain::hook::Outcome::Skipped),
+            };
+            SHARE_STATE.store(if outcome.hooked() { 1 } else { 2 }, Ordering::Release);
+            let _ = write!(
+                report,
+                " results_rematch=owner:{}/{} guests={}",
+                entry.name(),
+                outcome.name(),
+                GUESTS.len()
+            );
+            outcome.hooked()
+        }
+    }
+}
+
+pub unsafe fn install(report: &mut impl Write, callback: unsafe extern "C" fn(&mut InlineCtx)) {
+    // Keep the shared hook available to guests even when our input adapter
+    // fails a dependency. parsed() only publishes a private identity.
+    let rematch = shared(report);
+    let mut dependencies = true;
+    for site in model::SITES
+        .iter()
+        .filter(|s| s.kind == model::Kind::Relied)
+    {
+        let ok = runtime::site_address(site).is_some_and(|a| {
+            chain::usable(&site.stock(), &chain::hook::words_at(a), a, chain::WORDS)
+        });
+        if !ok {
+            dependencies = false;
+            let _ = write!(report, " site={} guard=mismatch", site.name);
+        }
+    }
+    if !dependencies {
+        let _ = write!(report, " results=off");
+        return;
+    }
+    let (ce, co) = runtime::hook(&model::RESULTS_CARDS, cards);
+    let (ie, io) = runtime::hook(&model::RESULTS_INPUT, callback);
+    let _ = write!(
+        report,
+        " results_cards={}/{} results_input={}/{} rematch_ready={}",
+        ce.name(),
+        co.name(),
+        ie.name(),
+        io.name(),
+        u8::from(rematch)
+    );
+    // Offline saving still works if the optional rematch sharing site refuses.
+    ENABLED.store(co.hooked() && io.hooked(), Ordering::Release);
+}

@@ -12,15 +12,17 @@ to Deluxe's Plugins page:
 
 | Row | Choices | What it does |
 | --- | --- | --- |
-| P1 | Player / CPU | The CPU drives P1's pad. While it does, **L+R+X** on P1's controller cycles the CPU level 1–9. |
-| Auto rematch | Off / On | Picks the rematch automatically. |
-| Auto save replay | Off / On | Saves the replay automatically after each match. |
+| P1 | Player / CPU | The CPU drives P1's pad, and P1's HUD tag reads "CPU Lv<n>". While it does, **L+R+X** on P1's controller cycles the CPU level 1–9. |
+| Auto rematch | Off / On | Online, answers Yes on the ordinary Quickplay/Elite "Rematch?" pop-up. |
+| Auto save replay | Off / On | Offline, saves the replay from the results screen through the game's own Save Replay dialog. |
 
 The CPU's decisions come from P1's own native AI object, run on a private
 copy of the AI random stream and written to P1's mapped input; the shared
 random streams and P1's controller fields are restored after every decision.
-P1 always starts as the player after a boot. The CPU drives P1 only in
-offline battles that have a CPU in them (Training, local Smash).
+P1 always starts as the player after a boot. Results automation presses
+buttons for P1's port only, each step gated on the game's own state, and
+stops for that results screen when a step does not happen in time
+([docs/RESULTS.md](docs/RESULTS.md)).
 
 *Status (2026-10-31): in development, not yet released. Eden evidence will
 be in `docs/EDEN-RESULTS.md`.*
@@ -29,10 +31,10 @@ be in `docs/EDEN-RESULTS.md`.*
 
 `core/` is the `ssbu-cpu-pilot-core` crate: settings and their INI form, the
 L+R+X level cycle, the level-to-rank ladder, the AI-to-pad encoding, the
-per-frame pilot session and the HUD label, plus (feature `native`) the raw
-AI calls. It has no Skyline dependency, so another plugin, such as the
-Training Modpack, can use it with its own hooks and Skyline version
-([docs/LIBRARY.md](docs/LIBRARY.md)).
+per-frame pilot session, the results policy and the HUD label, plus
+(feature `native`) the raw AI calls. It has no Skyline dependency, so another
+plugin, such as the Training Modpack, can use it with its own hooks and
+Skyline version ([docs/LIBRARY.md](docs/LIBRARY.md)).
 
 ## Install
 
@@ -48,8 +50,8 @@ menu.
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --no-default-features
-cargo skyline build --release                  # dist via tools/build.ps1 -Kind release
-cargo skyline build --release --features diag  # the Eden diagnostic build
+pwsh -File tools/build.ps1 -Kind release   # cargo skyline build --release -> dist/release
+pwsh -File tools/build.ps1 -Kind diag      # --features diag, the Eden build -> dist/diag
 ```
 
 Toolchain 1.98.1 (`rust-toolchain.toml`), `skyline = "=0.6.0"`.

@@ -1,0 +1,884 @@
+//! Bounded, once-per-results UI policy. One step is one UI input-builder frame.
+//! Native observations are supplied by the Switch adapter; no game calls here.
+use crate::settings::Settings;
+
+pub const A: u32 = 1 << 5;
+pub const Y: u32 = 1 << 7;
+pub const RIGHT: u32 = 1 << 21;
+pub const SAVE_RECORD: u64 = 0x58ff_ff14_5ea6_f7be;
+pub const SUCCESS_RECORD: u64 = 0x58ff_ff1e_1eed_5764;
+pub const REMATCH_RECORD: u64 = 0x58ff_ff1c_b2b1_1288;
+pub const CARDS_TIMEOUT: u16 = 1200;
+pub const DIALOG_TIMEOUT: u16 = 180;
+pub const SAVE_TIMEOUT: u16 = 900;
+pub const CLOSE_TIMEOUT: u16 = 480;
+pub const ANSWER_TIMEOUT: u16 = 360;
+pub const REMATCH_SETTLE: u32 = 36;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scene {
+    Offline,
+    Online,
+    Unsupported,
+}
+
+/// Allow only the local-Smash family used by the supplied replay guard fixture.
+/// Its value during native results still requires runtime qualification.
+/// All Online menu families skip saving, including unsupported rematch modes.
+pub fn scene(initialized: bool, mode: u32) -> Scene {
+    if !initialized {
+        return Scene::Unsupported;
+    }
+    match mode & 0x7fff_0000 {
+        0x0101_0000 => Scene::Offline,
+        m if m >> 24 == 7 => Scene::Online,
+        _ => Scene::Unsupported,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Popup {
+    pub record: u64,
+    pub phase: i32,
+    pub pending: i32,
+    pub age: u32,
+    pub result: u32,
+    pub decided: bool,
+    pub opening: bool,
+    pub default_button: u32,
+    pub cancel: u32,
+    pub input_mode: u32,
+    pub cursor: i32,
+}
+
+impl Popup {
+    pub fn ready(self) -> bool {
+        self.phase == 3
+            && self.pending == 3
+            && self.age >= 1
+            && self.result == 0
+            && !self.decided
+            && !self.opening
+    }
+    fn ordinary(self) -> bool {
+        self.record == REMATCH_RECORD
+            && self.default_button == 2
+            && self.cancel == 0
+            && self.input_mode == 2
+    }
+    fn save(self) -> bool {
+        self.record == SAVE_RECORD
+            && self.default_button == 1
+            && self.cancel == 0
+            && self.input_mode == 2
+    }
+    fn expired(self) -> bool {
+        self.phase >= 5 || self.pending >= 6 || self.decided || self.result != 0
+    }
+}
+
+/// epoch is the live results-sequence identity, zero when absent. A zero sample
+/// between two matches disambiguates a reused native address.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame {
+    pub epoch: usize,
+    pub scene: Scene,
+    pub port: Option<u8>,
+    pub cards_ready: bool,
+    pub save_status: Option<i32>,
+    pub popup: Option<Popup>,
+    /// Results identity captured by the shared ordinary-rematch parse callback.
+    pub rematch_epoch: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Input {
+    pub held: u32,
+    pub pressed: u32,
+    pub released: u32,
+    pub right: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Record {
+    pub held: u32,
+    pub pressed: u32,
+    pub released: u32,
+    pub pad: u32,
+    pub left: [f32; 4],
+    pub right: [f32; 4],
+}
+const _: () = assert!(core::mem::size_of::<Record>() == 0x30);
+
+impl Input {
+    /// Overlay only this port. Native records are rebuilt every frame; never
+    /// clear physical input or synthesize input for an unbound port.
+    pub fn apply(self, records: &mut [Record; 10], port: u8) {
+        let Some(r) = records.get_mut(usize::from(port)) else {
+            return;
+        };
+        r.held |= self.held;
+        r.pressed |= self.pressed;
+        r.released |= self.released;
+        if self.right {
+            r.left[0] = 1.0;
+            r.left[1] = 0.0;
+            r.left[3] = 0.0;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    Begin,
+    SaveSkippedOnline,
+    Unsupported,
+    SaveY,
+    SaveRight,
+    SaveConfirm,
+    Saving,
+    SaveClose,
+    Saved,
+    RematchA,
+    RematchYes,
+    Timeout,
+    FailedStatus,
+    UnexpectedStatus,
+    LostPopup,
+    WrongAnswer,
+    Cancelled,
+    SceneChanged,
+    PortChanged,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Output {
+    pub input: Input,
+    pub port: Option<u8>,
+    pub event: Option<Event>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    Idle,
+    Cards,
+    SaveDialog,
+    SelectYes,
+    Confirm,
+    Saving,
+    Close,
+    Rematch,
+    Answer,
+    End,
+}
+
+/// Fixed button pulse: one edge, five holds, one release, then ten neutral
+/// frames. A lost signal cancels immediately, with only a release remaining.
+#[derive(Clone, Copy, Debug)]
+struct Pulse {
+    mask: u32,
+    at: u8,
+}
+impl Pulse {
+    const fn new() -> Self {
+        Self { mask: 0, at: 17 }
+    }
+    fn start(&mut self, mask: u32) {
+        self.mask = mask;
+        self.at = 0;
+    }
+    fn idle(self) -> bool {
+        self.at >= 17
+    }
+    fn cancel(&mut self) -> Input {
+        let release = if self.at > 0 && self.at <= 6 {
+            self.mask
+        } else {
+            0
+        };
+        *self = Self::new();
+        Input {
+            released: release,
+            ..Input::default()
+        }
+    }
+    fn step(&mut self) -> Input {
+        let n = self.at;
+        self.at = self.at.saturating_add(1).min(17);
+        Input {
+            held: if n < 6 { self.mask } else { 0 },
+            pressed: if n == 0 { self.mask } else { 0 },
+            released: if n == 6 { self.mask } else { 0 },
+            right: false,
+        }
+    }
+}
+
+pub struct Results {
+    epoch: usize,
+    stage: Stage,
+    age: u16,
+    scene: Scene,
+    port: Option<u8>,
+    save: bool,
+    rematch: bool,
+    skipped: bool,
+    pulse: Pulse,
+    right_frames: u8,
+    neutral: u8,
+    rematch_seen: bool,
+}
+
+impl Default for Results {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Results {
+    pub const fn new() -> Self {
+        Self {
+            epoch: 0,
+            stage: Stage::Idle,
+            age: 0,
+            scene: Scene::Unsupported,
+            port: None,
+            save: false,
+            rematch: false,
+            skipped: false,
+            pulse: Pulse::new(),
+            right_frames: 0,
+            neutral: 0,
+            rematch_seen: false,
+        }
+    }
+    pub fn stage(&self) -> Stage {
+        self.stage
+    }
+    fn go(&mut self, stage: Stage) {
+        self.stage = stage;
+        self.age = 0;
+    }
+    fn end(&mut self, event: Event) -> Output {
+        self.go(Stage::End);
+        Output {
+            input: self.pulse.cancel(),
+            port: self.port,
+            event: Some(event),
+        }
+    }
+    fn press(&mut self, mask: u32, stage: Stage, event: Event) -> Output {
+        self.go(stage);
+        self.pulse.start(mask);
+        Output {
+            input: self.pulse.step(),
+            port: self.port,
+            event: Some(event),
+        }
+    }
+    fn wait(&mut self) -> Output {
+        Output {
+            input: self.pulse.step(),
+            port: self.port,
+            event: None,
+        }
+    }
+    pub fn step(&mut self, f: Frame, settings: Settings) -> Output {
+        if f.epoch != self.epoch {
+            let interrupted = self.epoch != 0 && !matches!(self.stage, Stage::End | Stage::Idle);
+            let release = self.pulse.cancel();
+            let old_port = self.port;
+            *self = Self {
+                epoch: f.epoch,
+                scene: f.scene,
+                port: f.port.filter(|p| *p < 10),
+                save: settings.auto_save_replay,
+                rematch: settings.auto_rematch,
+                ..Self::new()
+            };
+            if f.epoch != 0 {
+                self.stage = match f.scene {
+                    Scene::Offline if self.save => Stage::Cards,
+                    Scene::Online => Stage::Rematch,
+                    _ => Stage::End,
+                };
+            }
+            return Output {
+                input: release,
+                port: old_port,
+                event: if interrupted {
+                    Some(Event::SceneChanged)
+                } else if f.epoch != 0 {
+                    Some(Event::Begin)
+                } else {
+                    None
+                },
+            };
+        }
+        if self.epoch == 0 || self.stage == Stage::End {
+            return Output::default();
+        }
+        if f.scene != self.scene {
+            return self.end(Event::SceneChanged);
+        }
+        if self.scene == Scene::Online && self.save && !self.skipped {
+            self.skipped = true;
+            return Output {
+                event: Some(Event::SaveSkippedOnline),
+                ..Output::default()
+            };
+        }
+        if (self.scene == Scene::Offline && !settings.auto_save_replay)
+            || (self.scene == Scene::Online && (!self.rematch || !settings.auto_rematch))
+        {
+            return self.end(Event::Cancelled);
+        }
+        // Bind once when the controller mapping becomes available.
+        if self.port.is_none() {
+            self.port = f.port.filter(|p| *p < 10);
+        }
+        if self.port.is_some() && f.port != self.port {
+            return self.end(Event::PortChanged);
+        }
+        self.age = self.age.saturating_add(1);
+        let timeout = match self.stage {
+            Stage::Cards => CARDS_TIMEOUT,
+            Stage::SaveDialog | Stage::SelectYes | Stage::Confirm => DIALOG_TIMEOUT,
+            Stage::Saving => SAVE_TIMEOUT,
+            Stage::Close => CLOSE_TIMEOUT,
+            Stage::Rematch => CLOSE_TIMEOUT,
+            Stage::Answer => ANSWER_TIMEOUT,
+            _ => 0,
+        };
+        // Deadline wins even when the expected signal arrives on that frame.
+        if self.age >= timeout {
+            return self.end(Event::Timeout);
+        }
+        if self.port.is_none() {
+            return self.wait();
+        }
+        if self.scene == Scene::Offline && f.save_status == Some(4) {
+            return self.end(Event::FailedStatus);
+        }
+        let p = f.popup;
+        match self.stage {
+            Stage::Cards if f.cards_ready && f.save_status == Some(0) => {
+                return self.press(Y, Stage::SaveDialog, Event::SaveY);
+            }
+            Stage::SaveDialog => {
+                if f.save_status.is_some_and(|s| s != 0 && s != 1) {
+                    return self.end(Event::UnexpectedStatus);
+                }
+                if f.save_status == Some(1) && self.pulse.idle() {
+                    if let Some(p) = p.filter(|p| p.ready()) {
+                        if !p.save() || p.cursor != 1 {
+                            return self.end(Event::LostPopup);
+                        }
+                        self.go(Stage::SelectYes);
+                        self.right_frames = 0;
+                        self.neutral = 0;
+                        return Output {
+                            event: Some(Event::SaveRight),
+                            ..self.select(p)
+                        };
+                    }
+                }
+            }
+            Stage::SelectYes => {
+                let Some(p) = p.filter(|p| p.save() && p.ready()) else {
+                    return self.end(Event::LostPopup);
+                };
+                if f.save_status != Some(1) {
+                    return self.end(Event::UnexpectedStatus);
+                }
+                if self.neutral >= 10 && p.cursor == 2 {
+                    return self.press(A, Stage::Confirm, Event::SaveConfirm);
+                }
+                return self.select(p);
+            }
+            Stage::Confirm => {
+                if f.save_status == Some(2) {
+                    self.go(Stage::Saving);
+                    return Output {
+                        event: Some(Event::Saving),
+                        ..self.wait()
+                    };
+                }
+                if f.save_status.is_some_and(|s| s != 1) {
+                    return self.end(Event::UnexpectedStatus);
+                }
+                if p.is_some_and(|p| p.record != SAVE_RECORD || p.result == 1 || p.phase == 5) {
+                    return self.end(Event::WrongAnswer);
+                }
+                // Stop holds as soon as the dialog accepts or starts closing.
+                if p.is_none_or(|p| !p.ready()) {
+                    return Output {
+                        input: self.pulse.cancel(),
+                        port: self.port,
+                        event: None,
+                    };
+                }
+            }
+            Stage::Saving => {
+                if f.save_status.is_some_and(|s| s != 2 && s != 3) {
+                    return self.end(Event::UnexpectedStatus);
+                }
+                if f.save_status == Some(3)
+                    && self.pulse.idle()
+                    && p.is_some_and(|p| p.record == SUCCESS_RECORD && p.ready())
+                {
+                    return self.press(A, Stage::Close, Event::SaveClose);
+                }
+            }
+            Stage::Close => {
+                if f.save_status == Some(5) {
+                    return self.end(Event::Saved);
+                }
+                if f.save_status.is_some_and(|s| s != 3) {
+                    return self.end(Event::UnexpectedStatus);
+                }
+                if p.is_none_or(|p| p.record != SUCCESS_RECORD || !p.ready()) {
+                    return Output {
+                        input: self.pulse.cancel(),
+                        port: self.port,
+                        event: None,
+                    };
+                }
+            }
+            Stage::Rematch => {
+                if f.rematch_epoch == self.epoch {
+                    self.rematch_seen = true;
+                    if let Some(p) = p {
+                        if !p.ordinary() || p.expired() {
+                            return self.end(Event::LostPopup);
+                        }
+                        if p.ready() && p.age >= REMATCH_SETTLE && p.cursor == 2 {
+                            return self.press(A, Stage::Answer, Event::RematchA);
+                        }
+                    }
+                } else if self.rematch_seen {
+                    return self.end(Event::LostPopup);
+                }
+            }
+            Stage::Answer => {
+                let Some(p) = p.filter(|p| p.ordinary() && f.rematch_epoch == self.epoch) else {
+                    return self.end(Event::LostPopup);
+                };
+                // Accept only the normal native phase-3 decision, never a
+                // retained result, forced answer, or late closing observation.
+                if p.phase == 3 && p.pending == 6 && p.decided {
+                    return self.end(if p.result == 2 {
+                        Event::RematchYes
+                    } else {
+                        Event::WrongAnswer
+                    });
+                }
+                if p.expired() {
+                    return self.end(Event::LostPopup);
+                }
+                if !p.ready() {
+                    return Output {
+                        input: self.pulse.cancel(),
+                        port: self.port,
+                        event: None,
+                    };
+                }
+            }
+            _ => {}
+        }
+        self.wait()
+    }
+    fn select(&mut self, p: Popup) -> Output {
+        let input = if p.cursor == 2 || self.right_frames >= 11 {
+            self.neutral = self.neutral.saturating_add(1);
+            Input::default()
+        } else {
+            let first = self.right_frames == 0;
+            self.right_frames += 1;
+            Input {
+                held: RIGHT,
+                pressed: if first { RIGHT } else { 0 },
+                right: true,
+                ..Input::default()
+            }
+        };
+        Output {
+            input,
+            port: self.port,
+            event: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings() -> Settings {
+        Settings {
+            auto_save_replay: true,
+            auto_rematch: true,
+            ..Settings::default()
+        }
+    }
+    fn frame() -> Frame {
+        Frame {
+            epoch: 16,
+            scene: Scene::Offline,
+            port: Some(3),
+            cards_ready: true,
+            save_status: Some(0),
+            popup: None,
+            rematch_epoch: 0,
+        }
+    }
+    fn popup(record: u64) -> Popup {
+        Popup {
+            record,
+            phase: 3,
+            pending: 3,
+            age: 36,
+            default_button: if record == REMATCH_RECORD { 2 } else { 1 },
+            input_mode: 2,
+            cursor: if record == REMATCH_RECORD { 2 } else { 1 },
+            ..Popup::default()
+        }
+    }
+    fn until(r: &mut Results, f: Frame, event: Event, limit: u16) -> Output {
+        for _ in 0..limit {
+            let o = r.step(f, settings());
+            if o.event == Some(event) {
+                return o;
+            }
+            assert!(
+                !matches!(
+                    o.event,
+                    Some(Event::Timeout | Event::LostPopup | Event::UnexpectedStatus)
+                ),
+                "unexpected {:?} at {:?}",
+                o.event,
+                r.stage()
+            );
+        }
+        panic!("missing {event:?} at {:?}", r.stage());
+    }
+    fn begin() -> (Results, Frame) {
+        let mut r = Results::new();
+        let f = frame();
+        assert_eq!(r.step(f, settings()).event, Some(Event::Begin));
+        (r, f)
+    }
+    fn at_select() -> (Results, Frame) {
+        let (mut r, mut f) = begin();
+        assert_eq!(r.step(f, settings()).event, Some(Event::SaveY));
+        f.save_status = Some(1);
+        f.popup = Some(popup(SAVE_RECORD));
+        until(&mut r, f, Event::SaveRight, 30);
+        (r, f)
+    }
+    fn at_confirm() -> (Results, Frame) {
+        let (mut r, mut f) = at_select();
+        f.popup.as_mut().unwrap().cursor = 2;
+        until(&mut r, f, Event::SaveConfirm, 15);
+        (r, f)
+    }
+    #[test]
+    fn complete_save_requires_the_entire_native_status_chain_once() {
+        let (mut r, mut f) = at_confirm();
+        f.save_status = Some(2);
+        f.popup = None;
+        assert_eq!(r.step(f, settings()).event, Some(Event::Saving));
+        f.save_status = Some(3);
+        f.popup = Some(popup(SUCCESS_RECORD));
+        until(&mut r, f, Event::SaveClose, 30);
+        f.save_status = Some(5);
+        assert_eq!(r.step(f, settings()).event, Some(Event::Saved));
+        f.save_status = Some(0);
+        f.popup = None;
+        for _ in 0..2000 {
+            assert_eq!(r.step(f, settings()), Output::default());
+        }
+    }
+    #[test]
+    fn y_is_one_edge_five_holds_one_release_then_neutral() {
+        let (mut r, f) = begin();
+        for n in 0..25 {
+            let o = r.step(f, settings());
+            assert_eq!(o.input.pressed, if n == 0 { Y } else { 0 });
+            assert_eq!(o.input.held, if n < 6 { Y } else { 0 });
+            assert_eq!(o.input.released, if n == 6 { Y } else { 0 });
+        }
+    }
+    #[test]
+    fn direction_needs_a_live_yes_cursor_and_ten_neutral_frames() {
+        let (mut r, mut f) = at_select();
+        for _ in 0..20 {
+            assert_eq!(r.step(f, settings()).input.pressed & A, 0);
+        }
+        assert_eq!(r.right_frames, 11);
+        // No cursor acknowledgement: never send A; eventually terminal.
+        let mut sent = false;
+        for _ in 0..DIALOG_TIMEOUT {
+            sent |= r.step(f, settings()).input.pressed & A != 0;
+        }
+        assert!(!sent);
+        f.popup.as_mut().unwrap().cursor = 2;
+        assert_eq!(r.step(f, settings()), Output::default());
+
+        let (mut r, mut f) = at_select();
+        f.popup.as_mut().unwrap().cursor = 2;
+        for _ in 0..10 {
+            assert_eq!(r.step(f, settings()).input.pressed, 0);
+        }
+        assert_eq!(r.step(f, settings()).input.pressed, A);
+    }
+    #[test]
+    fn each_stage_deadline_wins_over_a_late_signal_and_never_retries() {
+        for stage in [
+            Stage::Cards,
+            Stage::SaveDialog,
+            Stage::SelectYes,
+            Stage::Confirm,
+            Stage::Saving,
+            Stage::Close,
+            Stage::Rematch,
+            Stage::Answer,
+        ] {
+            let (mut r, mut f) = begin();
+            r.stage = stage;
+            r.age = match stage {
+                Stage::Cards => CARDS_TIMEOUT,
+                Stage::Saving => SAVE_TIMEOUT,
+                Stage::Close | Stage::Rematch => CLOSE_TIMEOUT,
+                Stage::Answer => ANSWER_TIMEOUT,
+                _ => DIALOG_TIMEOUT,
+            } - 1;
+            if matches!(stage, Stage::Rematch | Stage::Answer) {
+                r.scene = Scene::Online;
+                r.save = false;
+                f.scene = Scene::Online;
+                f.rematch_epoch = f.epoch;
+                f.popup = Some(popup(REMATCH_RECORD));
+            }
+            let o = r.step(f, settings());
+            assert_eq!(o.event, Some(Event::Timeout), "{stage:?}");
+            assert_eq!(o.input.pressed, 0);
+            for _ in 0..10 {
+                assert_eq!(r.step(f, settings()), Output::default());
+            }
+        }
+    }
+    #[test]
+    fn missing_cards_popup_or_status_times_out_without_a_blind_next_press() {
+        for missing in 0..3 {
+            let (mut r, mut f) = begin();
+            if missing == 0 {
+                f.cards_ready = false;
+            }
+            if missing == 1 {
+                f.save_status = None;
+            }
+            let mut presses = 0;
+            let mut timed_out = false;
+            for _ in 0..(CARDS_TIMEOUT + DIALOG_TIMEOUT) {
+                let o = r.step(f, settings());
+                if o.input.pressed != 0 {
+                    presses += 1;
+                    assert_eq!(o.input.pressed, Y);
+                }
+                timed_out |= o.event == Some(Event::Timeout);
+            }
+            assert!(timed_out);
+            assert_eq!(presses, if missing == 2 { 1 } else { 0 });
+        }
+    }
+    #[test]
+    fn no_old_or_skipped_status_can_report_a_save() {
+        for status in [2, 3, 4, 5] {
+            let (mut r, mut f) = begin();
+            r.step(f, settings());
+            f.save_status = Some(status);
+            assert!(matches!(
+                r.step(f, settings()).event,
+                Some(Event::FailedStatus | Event::UnexpectedStatus)
+            ));
+            f.save_status = Some(5);
+            assert_eq!(r.step(f, settings()), Output::default());
+        }
+        let (mut r, mut f) = at_confirm();
+        f.save_status = Some(3);
+        f.popup = Some(popup(SUCCESS_RECORD));
+        assert_eq!(r.step(f, settings()).event, Some(Event::UnexpectedStatus));
+    }
+    #[test]
+    fn online_save_is_skipped_and_rematch_gets_one_a_at_ready_age_36() {
+        let mut r = Results::new();
+        let mut f = Frame {
+            scene: Scene::Online,
+            ..frame()
+        };
+        r.step(f, settings());
+        assert_eq!(r.step(f, settings()).event, Some(Event::SaveSkippedOnline));
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(Popup {
+            age: 35,
+            ..popup(REMATCH_RECORD)
+        });
+        assert_eq!(r.step(f, settings()).input, Input::default());
+        f.popup.as_mut().unwrap().age = 36;
+        let o = r.step(f, settings());
+        assert_eq!(o.event, Some(Event::RematchA));
+        assert_eq!(o.input.pressed, A);
+        for _ in 0..25 {
+            assert_eq!(r.step(f, settings()).input.pressed, 0);
+        }
+        let p = f.popup.as_mut().unwrap();
+        p.pending = 6;
+        p.result = 2;
+        p.decided = true;
+        assert_eq!(r.step(f, settings()).event, Some(Event::RematchYes));
+        assert_eq!(r.step(f, settings()), Output::default());
+    }
+    #[test]
+    fn rematch_does_not_accept_an_unqualified_or_changed_popup() {
+        for variant in 0..8 {
+            let mut r = Results::new();
+            let mut f = Frame {
+                scene: Scene::Online,
+                ..frame()
+            };
+            r.step(f, settings());
+            r.step(f, settings());
+            f.rematch_epoch = f.epoch;
+            let mut p = popup(REMATCH_RECORD);
+            match variant {
+                0 => p.record = SAVE_RECORD,
+                1 => p.default_button = 1,
+                2 => p.cancel = 1,
+                3 => p.input_mode = 1,
+                4 => p.phase = 5,
+                5 => p.result = 2,
+                6 => p.decided = true,
+                _ => p.pending = 6,
+            }
+            f.popup = Some(p);
+            let o = r.step(f, settings());
+            assert_eq!(o.input.pressed, 0);
+            assert_eq!(o.event, Some(Event::LostPopup));
+        }
+    }
+    #[test]
+    fn forced_late_no_and_unknown_answers_never_count_as_rematch_yes() {
+        for (phase, result) in [(5, 2), (6, 2), (0, 2), (3, 1), (3, 0), (3, 3)] {
+            let mut r = Results::new();
+            let mut f = Frame {
+                scene: Scene::Online,
+                ..frame()
+            };
+            r.step(f, settings());
+            r.step(f, settings());
+            f.rematch_epoch = f.epoch;
+            f.popup = Some(popup(REMATCH_RECORD));
+            r.step(f, settings());
+            let p = f.popup.as_mut().unwrap();
+            p.phase = phase;
+            p.pending = 6;
+            p.decided = true;
+            p.result = result;
+            let o = r.step(f, settings());
+            assert_ne!(o.event, Some(Event::RematchYes));
+            assert_eq!(o.input.pressed, 0);
+            assert_eq!(r.stage(), Stage::End);
+        }
+    }
+    #[test]
+    fn disable_scene_end_port_change_and_replaced_dialog_cancel_inputs() {
+        for variant in 0..4 {
+            let (mut r, mut f) = at_select();
+            let mut s = settings();
+            match variant {
+                0 => s.auto_save_replay = false,
+                1 => f.epoch = 0,
+                2 => f.port = Some(7),
+                _ => f.popup = Some(popup(REMATCH_RECORD)),
+            }
+            let o = r.step(f, s);
+            assert_eq!(o.input.held, 0);
+            assert_eq!(o.input.pressed, 0);
+        }
+    }
+    #[test]
+    fn reused_results_address_after_absence_starts_a_new_epoch() {
+        let (mut r, mut f) = begin();
+        assert_eq!(r.step(f, settings()).input.pressed, Y);
+        f.epoch = 0;
+        let o = r.step(f, settings());
+        assert_eq!(o.input.released, Y);
+        assert_eq!(o.port, Some(3));
+        f.epoch = 16;
+        r.step(f, settings());
+        assert_eq!(r.step(f, settings()).input.pressed, Y);
+    }
+    #[test]
+    fn port_binding_is_bounded_and_native_other_records_are_untouched() {
+        let original = Record {
+            held: 0x12,
+            pressed: 2,
+            left: [0.25, 0.5, 0.75, 1.0],
+            right: [1.0; 4],
+            ..Record::default()
+        };
+        let mut records = [original; 10];
+        Input {
+            held: RIGHT,
+            pressed: RIGHT,
+            right: true,
+            ..Input::default()
+        }
+        .apply(&mut records, 3);
+        for (i, r) in records.iter().enumerate() {
+            if i != 3 {
+                assert_eq!(*r, original);
+            }
+        }
+        assert_eq!(records[3].left, [1.0, 0.0, 0.75, 0.0]);
+        assert_eq!(records[3].right, original.right);
+        let before = records;
+        Input {
+            held: A,
+            ..Input::default()
+        }
+        .apply(&mut records, 10);
+        assert_eq!(records, before);
+        let mut r = Results::new();
+        let f = Frame {
+            port: Some(10),
+            ..frame()
+        };
+        r.step(f, settings());
+        for _ in 0..10 {
+            assert_eq!(r.step(f, settings()).input.pressed, 0);
+        }
+    }
+    #[test]
+    fn settings_off_and_unknown_playback_training_modes_never_press() {
+        for mode in [0, 0x05010100, 0x04040000, 0x02010000] {
+            let mut r = Results::new();
+            let f = Frame {
+                scene: scene(true, mode),
+                ..frame()
+            };
+            for _ in 0..10 {
+                assert_eq!(r.step(f, settings()).input, Input::default());
+            }
+        }
+        assert_eq!(scene(false, 0x01010000), Scene::Unsupported);
+        assert_eq!(scene(true, 0x01010000), Scene::Offline);
+        assert_eq!(scene(true, 0x07010101), Scene::Online);
+        let mut r = Results::new();
+        for _ in 0..10 {
+            assert_eq!(r.step(frame(), Settings::default()).input, Input::default());
+        }
+    }
+}
