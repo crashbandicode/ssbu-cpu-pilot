@@ -2,6 +2,10 @@
 //! records, a borrowed cards snapshot, and the shared online-rematch parse.
 //! All policy advances on the UI-builder callback. No native calls, popup
 //! writes, replay-commit hooks, or retained/dereferenced cards pointers.
+//! Online the save uses the same native chain as offline: the cards' update
+//! checks Y on each card's mapped UI port (`1d59d8c` → `1d5b590`) while the
+//! save is offered (`+0x930`), then the dialog, the write and the success
+//! pop-up publish statuses 1, 2, 3 and 5 as offline.
 use crate::{chain, model, runtime, share};
 use core::cell::UnsafeCell;
 use core::fmt::Write;
@@ -24,6 +28,21 @@ struct State {
     cards_port: Option<u8>,
     rematch_epoch: usize,
     last_epoch: usize,
+    #[cfg(feature = "diag")]
+    cards: CardsDiag,
+}
+/// The cards' fields behind the readiness test, logged once per epoch so an
+/// Eden run shows what the online results offered (`+0x928` route, `+0x930`
+/// save offered, `+0x924` finished, the first two cards' states).
+#[cfg(feature = "diag")]
+struct CardsDiag {
+    route: u32,
+    offered: u8,
+    finished: u8,
+    phase: i32,
+    pending: i32,
+    state: [i32; 2],
+    logged_epoch: usize,
 }
 static STATE: Owned<State> = Owned(UnsafeCell::new(State {
     flow: policy::Results::new(),
@@ -34,6 +53,16 @@ static STATE: Owned<State> = Owned(UnsafeCell::new(State {
     cards_port: None,
     rematch_epoch: 0,
     last_epoch: 0,
+    #[cfg(feature = "diag")]
+    cards: CardsDiag {
+        route: 0,
+        offered: 0,
+        finished: 0,
+        phase: 0,
+        pending: 0,
+        state: [0; 2],
+        logged_epoch: 0,
+    },
 }));
 
 fn with_state(f: impl FnOnce(&mut State)) {
@@ -76,6 +105,21 @@ unsafe fn status() -> Option<i32> {
     singleton(0x52c35c8).map(|p| read(p + 0x10))
 }
 
+/// The UI port of fighter entry `entry` (`[[main+52c50f0]+0x298+4*entry]`,
+/// -1 when none), the table the cards' save loop reads (`1d59dc4`).
+unsafe fn entry_port(entry: usize) -> Option<u8> {
+    let table = pointer(base() + 0x52c50f0)? + 0x298;
+    let port = read::<i32>(table + entry * 4);
+    (0..10).contains(&port).then_some(port as u8)
+}
+
+/// Online only the local fighter entry maps to a UI port; the game checks Y
+/// on each card's own port (`1d59dc4` → `1d5b590`), so the save's input must
+/// ride that port, whichever entry the local player is (slot 1 in Eden r02).
+unsafe fn mapped_port() -> Option<u8> {
+    (0..8).find_map(|entry| entry_port(entry))
+}
+
 unsafe fn popup() -> Option<policy::Popup> {
     let wrapper = pointer(base() + 0x532f820)?;
     let p = pointer(wrapper + 8)?;
@@ -110,10 +154,7 @@ unsafe extern "C" fn cards(ctx: &mut InlineCtx) {
     if e == 0 {
         return;
     }
-    let port = pointer(base() + 0x52c50f0).and_then(|p| {
-        let port = read::<i32>(p + 0x298); // fighter-entry 0 -> UI port
-        (0..10).contains(&port).then_some(port as u8)
-    });
+    let port = entry_port(0); // offline P1: fighter-entry 0 -> UI port
     let idle = singleton(0x532f820)
         .is_some_and(|p| read::<i32>(p + 0xf8) == 0 && read::<u8>(p + 0x142) == 0);
     let ready = read::<i32>(c + 0xf8) == 2
@@ -128,6 +169,15 @@ unsafe extern "C" fn cards(ctx: &mut InlineCtx) {
         s.cards_frame = s.frame;
         s.cards_ready = ready;
         s.cards_port = port;
+        #[cfg(feature = "diag")]
+        {
+            s.cards.route = read(c + 0x928);
+            s.cards.offered = read(c + 0x930);
+            s.cards.finished = read(c + 0x924);
+            s.cards.phase = read(c + 0xf8);
+            s.cards.pending = pending(c).unwrap_or(-1);
+            s.cards.state = [read(c + 0x118), read(c + 0x218)];
+        }
     });
 }
 
@@ -168,15 +218,36 @@ pub unsafe fn frame(records: *mut [policy::Record; 10], settings: Settings) {
         // Local Smash maps fighter-entry 0 through the game's port table, which
         // is only sampled with the cards: before them (the winner splash) the
         // port is None and the core presses its splash A on UI port 0 itself.
-        // Use only the first local online UI port, as in the supplied adapter.
-        // Native popup acceptance of this port still needs runtime qualification.
-        let port = if scene == policy::Scene::Online {
-            Some(0)
+        // Online the local entry's mapped port carries Y, Right and A; UI port
+        // 0 when the table maps none (the port the rematch used in Eden r02).
+        let port = if e == 0 {
+            None
+        } else if scene == policy::Scene::Online {
+            mapped_port().or(Some(0))
         } else if s.cards_epoch == e {
             s.cards_port
         } else {
             None
         };
+        #[cfg(feature = "diag")]
+        if cards_seen && s.cards.logged_epoch != e {
+            s.cards.logged_epoch = e;
+            runtime::diag_event(format_args!(
+                "results epoch={:#x} port={} cards=sample route={} offered={} finished={} phase={} pending={} state0={} state1={} ready={} status={} mode={:#x}",
+                e,
+                port.unwrap_or(255),
+                s.cards.route,
+                s.cards.offered,
+                s.cards.finished,
+                s.cards.phase,
+                s.cards.pending,
+                s.cards.state[0],
+                s.cards.state[1],
+                u8::from(fresh_cards && s.cards_ready),
+                status().unwrap_or(-1),
+                read::<u32>(base() + 0x53050f0)
+            ));
+        }
         let seen = policy::Frame {
             epoch: e,
             scene,
@@ -223,7 +294,7 @@ fn event_name(event: policy::Event) -> &'static str {
     use policy::Event::*;
     match event {
         Begin => "epoch=begin",
-        SaveSkippedOnline => "save=skipped_online",
+        SaveLate => "save=late_rematch_popup",
         Unsupported => "flow=unsupported",
         // Static text keeps the diag path free of allocation; n is 1..=SPLASH_MAX.
         SplashA(n) => {

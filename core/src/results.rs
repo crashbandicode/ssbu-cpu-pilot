@@ -169,7 +169,9 @@ impl Input {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     Begin,
-    SaveSkippedOnline,
+    /// Online: the "Rematch?" pop-up was parsed before the save's Y could be
+    /// pressed, so the save is given up and the rematch is answered.
+    SaveLate,
     Unsupported,
     /// The k-th (1-based) splash A of this epoch, on `SPLASH_PORT`.
     SplashA(u8),
@@ -258,11 +260,13 @@ pub struct Results {
     epoch: usize,
     stage: Stage,
     age: u16,
+    /// Frames since epoch begin: the online rematch deadline counts from here,
+    /// however long the save before it took.
+    epoch_age: u16,
     scene: Scene,
     port: Option<u8>,
     save: bool,
     rematch: bool,
-    skipped: bool,
     pulse: Pulse,
     right_frames: u8,
     neutral: u8,
@@ -286,11 +290,11 @@ impl Results {
             epoch: 0,
             stage: Stage::Idle,
             age: 0,
+            epoch_age: 0,
             scene: Scene::Unsupported,
             port: None,
             save: false,
             rematch: false,
-            skipped: false,
             pulse: Pulse::new(),
             right_frames: 0,
             neutral: 0,
@@ -317,6 +321,30 @@ impl Results {
     }
     fn end(&mut self, event: Event) -> Output {
         self.go(Stage::End);
+        let port = self.lane();
+        Output {
+            input: self.pulse.cancel(),
+            port,
+            event: Some(event),
+        }
+    }
+    /// The stages of the save, from the wait for the cards to the success
+    /// pop-up's close.
+    fn saving(&self) -> bool {
+        matches!(
+            self.stage,
+            Stage::Cards | Stage::SaveDialog | Stage::SelectYes | Stage::Confirm | Stage::Saving | Stage::Close
+        )
+    }
+    /// After the save (completed, failed or given up): online with Auto
+    /// rematch on, the epoch goes on to wait for the "Rematch?" pop-up;
+    /// otherwise it ends.
+    fn next(&mut self, event: Event) -> Output {
+        if self.scene != Scene::Online || !self.rematch {
+            return self.end(event);
+        }
+        self.go(Stage::Rematch);
+        self.splash_pulse = false;
         let port = self.lane();
         Output {
             input: self.pulse.cancel(),
@@ -369,9 +397,12 @@ impl Results {
                 ..Self::new()
             };
             if f.epoch != 0 {
+                // Online the save runs first: the game shows "Rematch?" about
+                // 21 s after the match (Eden r02), the save chain takes about
+                // 1.2 s (Eden c19), and `next` moves on to the rematch after it.
                 self.stage = match f.scene {
-                    Scene::Offline if self.save => Stage::Cards,
-                    Scene::Online => Stage::Rematch,
+                    Scene::Offline | Scene::Online if self.save => Stage::Cards,
+                    Scene::Online if self.rematch => Stage::Rematch,
                     _ => Stage::End,
                 };
             }
@@ -393,16 +424,13 @@ impl Results {
         if f.scene != self.scene {
             return self.end(Event::SceneChanged);
         }
-        if self.scene == Scene::Online && self.save && !self.skipped {
-            self.skipped = true;
-            return Output {
-                event: Some(Event::SaveSkippedOnline),
-                ..Output::default()
-            };
+        // A row turned off mid-epoch cancels its part: the save gives way to
+        // the rematch (online, when that row is on), the rematch just ends.
+        let saving = self.saving();
+        if saving && !settings.auto_save_replay {
+            return self.next(Event::Cancelled);
         }
-        if (self.scene == Scene::Offline && !settings.auto_save_replay)
-            || (self.scene == Scene::Online && (!self.rematch || !settings.auto_rematch))
-        {
+        if !saving && !settings.auto_rematch {
             return self.end(Event::Cancelled);
         }
         // Bind once when the controller mapping becomes available.
@@ -425,18 +453,24 @@ impl Results {
             };
         }
         self.age = self.age.saturating_add(1);
-        let timeout = match self.stage {
-            Stage::Cards => CARDS_TIMEOUT,
-            Stage::SaveDialog | Stage::SelectYes | Stage::Confirm => DIALOG_TIMEOUT,
-            Stage::Saving => SAVE_TIMEOUT,
-            Stage::Close => CLOSE_TIMEOUT,
-            Stage::Rematch => REMATCH_WAIT,
-            Stage::Answer => ANSWER_TIMEOUT,
-            _ => 0,
-        };
+        self.epoch_age = self.epoch_age.saturating_add(1);
         // Deadline wins even when the expected signal arrives on that frame.
-        if self.age >= timeout {
-            return self.end(Event::Timeout);
+        // The rematch's counts from epoch begin, whatever the save took.
+        let expired = match self.stage {
+            Stage::Cards => self.age >= CARDS_TIMEOUT,
+            Stage::SaveDialog | Stage::SelectYes | Stage::Confirm => self.age >= DIALOG_TIMEOUT,
+            Stage::Saving => self.age >= SAVE_TIMEOUT,
+            Stage::Close => self.age >= CLOSE_TIMEOUT,
+            Stage::Rematch => self.epoch_age >= REMATCH_WAIT,
+            Stage::Answer => self.age >= ANSWER_TIMEOUT,
+            _ => true,
+        };
+        if expired {
+            return if saving {
+                self.next(Event::Timeout)
+            } else {
+                self.end(Event::Timeout)
+            };
         }
         if self.port.is_none() {
             // Offline, no cards sample yet: the winner splash is on screen.
@@ -456,22 +490,27 @@ impl Results {
             }
             return self.wait();
         }
-        if self.scene == Scene::Offline && f.save_status == Some(4) {
-            return self.end(Event::FailedStatus);
+        if saving && f.save_status == Some(4) {
+            return self.next(Event::FailedStatus);
         }
         let p = f.popup;
         match self.stage {
+            // Online, the "Rematch?" pop-up parsed before Y was pressed: the
+            // game has moved on, so the save is given up for the rematch.
+            Stage::Cards if self.scene == Scene::Online && f.rematch_epoch == self.epoch => {
+                return self.next(Event::SaveLate);
+            }
             Stage::Cards if f.cards_ready && f.save_status == Some(0) => {
                 return self.press(Y, Stage::SaveDialog, Event::SaveY);
             }
             Stage::SaveDialog => {
                 if f.save_status.is_some_and(|s| s != 0 && s != 1) {
-                    return self.end(Event::UnexpectedStatus);
+                    return self.next(Event::UnexpectedStatus);
                 }
                 if f.save_status == Some(1) && self.pulse.idle() {
                     if let Some(p) = p.filter(|p| p.ready()) {
                         if !p.save() || p.cursor != 1 {
-                            return self.end(Event::LostPopup);
+                            return self.next(Event::LostPopup);
                         }
                         self.go(Stage::SelectYes);
                         self.right_frames = 0;
@@ -485,10 +524,10 @@ impl Results {
             }
             Stage::SelectYes => {
                 let Some(p) = p.filter(|p| p.save() && p.ready()) else {
-                    return self.end(Event::LostPopup);
+                    return self.next(Event::LostPopup);
                 };
                 if f.save_status != Some(1) {
-                    return self.end(Event::UnexpectedStatus);
+                    return self.next(Event::UnexpectedStatus);
                 }
                 if self.neutral >= 10 && p.cursor == 2 {
                     return self.press(A, Stage::Confirm, Event::SaveConfirm);
@@ -504,10 +543,10 @@ impl Results {
                     };
                 }
                 if f.save_status.is_some_and(|s| s != 1) {
-                    return self.end(Event::UnexpectedStatus);
+                    return self.next(Event::UnexpectedStatus);
                 }
                 if p.is_some_and(|p| p.record != SAVE_RECORD || p.result == 1 || p.phase == 5) {
-                    return self.end(Event::WrongAnswer);
+                    return self.next(Event::WrongAnswer);
                 }
                 // Stop holds as soon as the dialog accepts or starts closing.
                 if p.is_none_or(|p| !p.ready()) {
@@ -520,7 +559,7 @@ impl Results {
             }
             Stage::Saving => {
                 if f.save_status.is_some_and(|s| s != 2 && s != 3) {
-                    return self.end(Event::UnexpectedStatus);
+                    return self.next(Event::UnexpectedStatus);
                 }
                 if f.save_status == Some(3)
                     && self.pulse.idle()
@@ -531,10 +570,10 @@ impl Results {
             }
             Stage::Close => {
                 if f.save_status == Some(5) {
-                    return self.end(Event::Saved);
+                    return self.next(Event::Saved);
                 }
                 if f.save_status.is_some_and(|s| s != 3) {
-                    return self.end(Event::UnexpectedStatus);
+                    return self.next(Event::UnexpectedStatus);
                 }
                 if p.is_none_or(|p| p.record != SUCCESS_RECORD || !p.ready()) {
                     return Output {
@@ -619,6 +658,36 @@ mod tests {
             auto_rematch: true,
             ..Settings::default()
         }
+    }
+    fn rematch_only() -> Settings {
+        Settings {
+            auto_save_replay: false,
+            ..settings()
+        }
+    }
+    /// Online results: the local fighter's UI port is mapped from the start.
+    fn online() -> Frame {
+        Frame {
+            scene: Scene::Online,
+            port: Some(0),
+            ..frame()
+        }
+    }
+    /// The save chain after the Y press, dialog to `Saved`, on frame `f`.
+    fn save_chain(r: &mut Results, f: &mut Frame) -> Output {
+        f.save_status = Some(1);
+        f.popup = Some(popup(SAVE_RECORD));
+        until(r, *f, Event::SaveRight, 30);
+        f.popup.as_mut().unwrap().cursor = 2;
+        until(r, *f, Event::SaveConfirm, 15);
+        f.save_status = Some(2);
+        f.popup = None;
+        assert_eq!(r.step(*f, settings()).event, Some(Event::Saving));
+        f.save_status = Some(3);
+        f.popup = Some(popup(SUCCESS_RECORD));
+        until(r, *f, Event::SaveClose, 30);
+        f.save_status = Some(5);
+        r.step(*f, settings())
     }
     fn frame() -> Frame {
         Frame {
@@ -769,6 +838,7 @@ mod tests {
                 Stage::Answer => ANSWER_TIMEOUT,
                 _ => DIALOG_TIMEOUT,
             } - 1;
+            r.epoch_age = r.age;
             if matches!(stage, Stage::Rematch | Stage::Answer) {
                 r.scene = Scene::Online;
                 r.save = false;
@@ -850,24 +920,51 @@ mod tests {
     }
 
     #[test]
-    fn online_save_is_skipped_and_rematch_gets_one_a_at_ready_age_36() {
+    fn online_rematch_alone_gets_one_a_at_ready_age_36() {
         let mut r = Results::new();
-        let mut f = Frame {
-            scene: Scene::Online,
-            ..frame()
-        };
-        r.step(f, settings());
-        assert_eq!(r.step(f, settings()).event, Some(Event::SaveSkippedOnline));
+        let mut f = online();
+        assert_eq!(r.step(f, rematch_only()).event, Some(Event::Begin));
+        assert_eq!(r.stage(), Stage::Rematch);
         f.rematch_epoch = f.epoch;
         f.popup = Some(Popup {
             age: 35,
             ..popup(REMATCH_RECORD)
         });
-        assert_eq!(r.step(f, settings()).input, Input::default());
+        assert_eq!(r.step(f, rematch_only()).input, Input::default());
         f.popup.as_mut().unwrap().age = 36;
-        let o = r.step(f, settings());
+        let o = r.step(f, rematch_only());
         assert_eq!(o.event, Some(Event::RematchA));
         assert_eq!(o.input.pressed, A);
+        for _ in 0..25 {
+            assert_eq!(r.step(f, rematch_only()).input.pressed, 0);
+        }
+        let p = f.popup.as_mut().unwrap();
+        p.pending = 6;
+        p.result = 2;
+        p.decided = true;
+        assert_eq!(r.step(f, rematch_only()).event, Some(Event::RematchYes));
+        assert_eq!(r.step(f, rematch_only()), Output::default());
+    }
+    #[test]
+    fn online_saves_first_then_answers_the_rematch() {
+        let mut r = Results::new();
+        let mut f = online();
+        assert_eq!(r.step(f, settings()).event, Some(Event::Begin));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed, o.port), (Some(Event::SaveY), Y, Some(0)));
+        assert_eq!(save_chain(&mut r, &mut f).event, Some(Event::Saved));
+        assert_eq!(r.stage(), Stage::Rematch);
+        // The success pop-up lingers; nothing is pressed until the rematch
+        // record is parsed in this epoch.
+        f.save_status = Some(0);
+        for _ in 0..100 {
+            let o = r.step(f, settings());
+            assert_eq!((o.event, o.input), (None, Input::default()));
+        }
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(popup(REMATCH_RECORD));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed, o.port), (Some(Event::RematchA), A, Some(0)));
         for _ in 0..25 {
             assert_eq!(r.step(f, settings()).input.pressed, 0);
         }
@@ -879,15 +976,131 @@ mod tests {
         assert_eq!(r.step(f, settings()), Output::default());
     }
     #[test]
+    fn online_save_alone_ends_after_saved() {
+        let s = Settings {
+            auto_rematch: false,
+            ..settings()
+        };
+        let mut r = Results::new();
+        let mut f = online();
+        assert_eq!(r.step(f, s).event, Some(Event::Begin));
+        assert_eq!(r.step(f, s).event, Some(Event::SaveY));
+        assert_eq!(save_chain(&mut r, &mut f).event, Some(Event::Saved));
+        assert_eq!(r.stage(), Stage::End);
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(popup(REMATCH_RECORD));
+        for _ in 0..200 {
+            assert_eq!(r.step(f, s), Output::default());
+        }
+    }
+    #[test]
+    fn online_save_timeout_or_lost_dialog_still_waits_for_the_rematch() {
+        // Cards never ready: the save gives up at its deadline, the rematch
+        // is still answered, and the rematch deadline counts from epoch begin.
+        let mut r = Results::new();
+        let mut f = Frame {
+            cards_ready: false,
+            ..online()
+        };
+        r.step(f, settings());
+        let mut timeout = None;
+        for n in 1..=CARDS_TIMEOUT {
+            let o = r.step(f, settings());
+            assert_eq!(o.input.pressed, 0);
+            if o.event == Some(Event::Timeout) {
+                timeout = Some(n);
+                break;
+            }
+        }
+        assert_eq!(timeout, Some(CARDS_TIMEOUT));
+        assert_eq!(r.stage(), Stage::Rematch);
+        let mut n = 0u16;
+        loop {
+            n += 1;
+            let o = r.step(f, settings());
+            assert_eq!(o.input, Input::default());
+            if o.event == Some(Event::Timeout) {
+                break;
+            }
+            assert!(n < 3000);
+        }
+        assert_eq!(CARDS_TIMEOUT + n, REMATCH_WAIT);
+        assert_eq!(r.stage(), Stage::End);
+        // Answered in time when the pop-up comes.
+        let mut r = Results::new();
+        r.step(f, settings());
+        for _ in 0..CARDS_TIMEOUT {
+            r.step(f, settings());
+        }
+        assert_eq!(r.stage(), Stage::Rematch);
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(popup(REMATCH_RECORD));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed), (Some(Event::RematchA), A));
+        // A dialog replaced by the rematch pop-up mid-save gives way too.
+        let mut r = Results::new();
+        let mut f = online();
+        r.step(f, settings());
+        assert_eq!(r.step(f, settings()).event, Some(Event::SaveY));
+        f.save_status = Some(1);
+        f.popup = Some(popup(SAVE_RECORD));
+        until(&mut r, f, Event::SaveRight, 30);
+        f.popup = Some(popup(REMATCH_RECORD));
+        f.rematch_epoch = f.epoch;
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.held), (Some(Event::LostPopup), 0));
+        assert_eq!(r.stage(), Stage::Rematch);
+        f.save_status = Some(0);
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed), (Some(Event::RematchA), A));
+    }
+    #[test]
+    fn online_rematch_popup_before_the_save_gives_way_to_the_rematch() {
+        let mut r = Results::new();
+        let mut f = Frame {
+            cards_ready: false,
+            ..online()
+        };
+        r.step(f, settings());
+        for _ in 0..300 {
+            let o = r.step(f, settings());
+            assert_eq!((o.event, o.input), (None, Input::default()));
+        }
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(popup(REMATCH_RECORD));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed), (Some(Event::SaveLate), 0));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed), (Some(Event::RematchA), A));
+        // Without Auto rematch the late save just ends.
+        let s = Settings {
+            auto_rematch: false,
+            ..settings()
+        };
+        let mut r = Results::new();
+        r.step(f, s);
+        assert_eq!(r.step(f, s).event, Some(Event::SaveLate));
+        assert_eq!(r.stage(), Stage::End);
+    }
+    #[test]
+    fn online_save_row_turned_off_mid_epoch_moves_on_to_the_rematch() {
+        let mut r = Results::new();
+        let f = online();
+        r.step(f, settings());
+        assert_eq!(r.step(f, settings()).event, Some(Event::SaveY));
+        let o = r.step(f, rematch_only());
+        assert_eq!((o.event, o.input.released), (Some(Event::Cancelled), Y));
+        assert_eq!(r.stage(), Stage::Rematch);
+        // Both rows off: the epoch ends.
+        assert_eq!(r.step(f, Settings::default()).event, Some(Event::Cancelled));
+        assert_eq!(r.stage(), Stage::End);
+    }
+    #[test]
     fn rematch_does_not_accept_an_unqualified_or_changed_popup() {
         for variant in 0..8 {
             let mut r = Results::new();
-            let mut f = Frame {
-                scene: Scene::Online,
-                ..frame()
-            };
-            r.step(f, settings());
-            r.step(f, settings());
+            let mut f = online();
+            r.step(f, rematch_only());
             f.rematch_epoch = f.epoch;
             let mut p = popup(REMATCH_RECORD);
             match variant {
@@ -901,7 +1114,7 @@ mod tests {
                 _ => p.pending = 6,
             }
             f.popup = Some(p);
-            let o = r.step(f, settings());
+            let o = r.step(f, rematch_only());
             assert_eq!(o.input.pressed, 0);
             assert_eq!(o.event, Some(Event::LostPopup));
         }
@@ -910,21 +1123,17 @@ mod tests {
     fn forced_late_no_and_unknown_answers_never_count_as_rematch_yes() {
         for (phase, result) in [(5, 2), (6, 2), (0, 2), (3, 1), (3, 0), (3, 3)] {
             let mut r = Results::new();
-            let mut f = Frame {
-                scene: Scene::Online,
-                ..frame()
-            };
-            r.step(f, settings());
-            r.step(f, settings());
+            let mut f = online();
+            r.step(f, rematch_only());
             f.rematch_epoch = f.epoch;
             f.popup = Some(popup(REMATCH_RECORD));
-            r.step(f, settings());
+            r.step(f, rematch_only());
             let p = f.popup.as_mut().unwrap();
             p.phase = phase;
             p.pending = 6;
             p.decided = true;
             p.result = result;
-            let o = r.step(f, settings());
+            let o = r.step(f, rematch_only());
             assert_ne!(o.event, Some(Event::RematchYes));
             assert_eq!(o.input.pressed, 0);
             assert_eq!(r.stage(), Stage::End);
@@ -1152,7 +1361,8 @@ mod tests {
                 assert_eq!(r.step(f, settings()).input, Input::default());
             }
         }
-        // Online has its own rematch flow: no popup, no press, no splash event.
+        // Online waits for the cards without splash presses: the online splash
+        // advances by itself (Eden r01/r02).
         let mut r = Results::new();
         let f = Frame {
             scene: Scene::Online,

@@ -27,6 +27,7 @@ Hooks use the existing guarded stock/direct-branch/far-chain recognition.
 | `147fb64` | RESULTS_REMATCH: x20 record, x19 popup wrapper | elite_rematch; inline sharing v1 |
 | `150ea38` | RESULTS_LIFETIME: results destruction/null | No reference; read only |
 | `1d59dc4` | RESULTS_PORT: fighter-to-port table | No reference; read only |
+| `1d59d8c` | RESULTS_SAVE_OFFER: save offered, per-card Y check loop (online and offline) | No reference; read only |
 | `1d5b5a8` | RESULTS_Y: modal gate, record stride, Y | No reference; read only |
 | `1d5b650` | RESULTS_SAVE_OPEN: descriptor/status 1 | No reference; read only |
 | `1d5a590` | RESULTS_SAVE_ACCEPT: button 2/status 2 | No reference; read only |
@@ -57,7 +58,20 @@ wrapper. A sampled zero separates reused addresses. Cards are borrowed only
 at `1d59560`, never dereferenced later; cached readiness expires after one UI
 callback. Offline P1 uses fighter-entry 0 through `[main+52c50f0]+298`, matching
 the mapping code at `1d59dc4`; it is sampled only with the cards, so before them
-(the winner splash) there is no offline port. Online uses only first local UI port 0.
+(the winner splash) there is no offline port. Online the port is the first fighter entry the
+same table maps (`1d59dc4`; remote players map to -1), read every frame, UI port 0 when
+none is mapped (the port the rematch used in Eden r02).
+
+Online save (2026-11-01, branch `online-save`): the game offers the replay save on the online
+results too. The cards object is created with `+0x930` (save offered) set (`1d5d1ec`); its update
+`1d59540` plays the `ptn_01` offer and, while `+0x930` holds and route `+0x928` is nonzero,
+calls `1d5b590(cards, port)` for each of the eight cards with the card fighter's mapped UI port
+(`1d59d8c`..`1d59de0`). `1d5b590` requires modal mask `[[main+593b988]+8] <= 1`, Y pressed on
+that port's record, and the replay predicate `175bf90(0)`, whose mode switch admits online melee
+`0x0e` (bit 14 of mask `0x1ffcf8f`) and refuses Training `0x0d`; then it parses the Save record,
+displays it and publishes status 1, the same chain as offline. The "Rematch?" pop-up (`147fb64`)
+is shown over the winner splash about 21 s after `epoch=begin` (Eden r02 frames), so the save runs
+first and the rematch after it.
 
 Each frame means one completed UI-builder invocation; seconds below assume
 60 Hz and are not measured. Settings bind per epoch; disabling, scene/port
@@ -96,12 +110,18 @@ epoch without retry. A late signal cannot restart it.
    is failure. Completion requires the entire owned 0->1->2->3->5 chain;
    no replay-commit hook is needed, and byte-level replay persistence is not
    independently observed by this plugin.
-6. Online saving logs `save=skipped_online`. Ordinary rematch requires the
-   shared parse to capture record `58ffff1cb2b11288` in this epoch. Within
-   480 frames, require phase/pending 3, age >=36, result=0, not opening or
-   decided, default/cursor=2, cancel=0, input mode=2. Press A once. Within
-   360 frames require native phase3/pending6/decided/result2. Forced phase5,
-   closing phase6/7, and retained results are never accepted as success.
+6. Online with Auto save on: steps 1 to 5 as offline (no splash A; the online
+   splash advances alone), on the mapped port. The save's end (completed,
+   failed, timed out or given up) moves on to the rematch when Auto rematch
+   is on, otherwise ends the epoch; a "Rematch?" record parsed before Y was
+   pressed gives the save up (`save=late_rematch_popup`). The rematch's
+   `REMATCH_WAIT` (2400 frames) counts from `epoch=begin`, whatever the save
+   took. Ordinary rematch requires the shared parse to capture record
+   `58ffff1cb2b11288` in this epoch; then require phase/pending 3, age >=36,
+   result=0, not opening or decided, default/cursor=2, cancel=0, input
+   mode=2. Press A once. Within 360 frames require native
+   phase3/pending6/decided/result2. Forced phase5, closing phase6/7, and
+   retained results are never accepted as success.
 
 Popup fields come from the supplied Training Modpack `automation_helper`
 (native/popup/adapter/pulse/flow); cursor binding was additionally traced:
@@ -136,8 +156,10 @@ Diagnostics emit transition lines with this literal format (numbers vary):
 Offline, zero to twelve `save=press_a_splash n=1..12` lines (port=0) may precede the
 save tokens, and none follows `save=press_y`. For a save, require in order `save=press_y`, `save=select_yes`, `save=confirm`,
 `save=writing`, `save=close_success`, `save=completed` with final status=5.
-Online require `save=skipped_online` when enabled, then `rematch=press_a`
-and `rematch=accepted`. Install must show `results_cards=stock/near` (or `/far`),
+Online with both rows on, require the same save tokens through `save=completed` and then
+`rematch=press_a` and `rematch=accepted`; the diag build also logs one
+`cards=sample route=N offered=N finished=N phase=N pending=N state0=N state1=N ready=N`
+line per epoch at the first cards sample. Install must show `results_cards=stock/near` (or `/far`),
 `results_input=stock/near` (or `/far`), and `rematch_ready=1`; shared-site role is
 `results_rematch=guest` or `results_rematch=owner:stock/near` (or a recognized chain/branch and near/far).
 For failure tests, require `flow=timeout step=...`, `save=failed_status_4`,

@@ -441,6 +441,22 @@ pub const RESULTS_PORT: Site = Site {
     ],
 };
 
+/// Cards update, the save offer: while `+0x930` is set the Y check runs for
+/// each card on its fighter's mapped UI port (`1d5b590(cards, port)`), the
+/// same loop online (route `+0x928` nonzero) and offline.
+pub const RESULTS_SAVE_OFFER: Site = Site {
+    name: "results_save_offer",
+    offset: 0x1d59d8c,
+    kind: Kind::Relied,
+    hud: false,
+    guard: [
+        0x68, 0xc2, 0x64, 0x39, 0x08, 0xff, 0xff, 0x34, 0x40, 0x05, 0x40, 0xf9, 0x00, 0x10, 0x2e, 0x1e,
+        0xa1, 0x27, 0x01, 0xd0, 0x21, 0x70, 0x20, 0x91, 0x57, 0x79, 0x68, 0x94, 0x68, 0xc2, 0x64, 0x39,
+        0x28, 0xfe, 0xff, 0x34, 0x68, 0x2a, 0x49, 0xb9, 0x88, 0x03, 0x00, 0x34, 0xf4, 0x03, 0x00, 0x32,
+        0x96, 0x22, 0x80, 0x52, 0x17, 0x00, 0x80, 0x12, 0x68, 0x6a, 0xb6, 0xb8, 0x1f, 0x1d, 0x00, 0x71,
+    ],
+};
+
 /// Save input consumes UI port stride 0x30, pressed bit 7 and modal gate.
 pub const RESULTS_Y: Site = Site {
     name: "results_y",
@@ -586,7 +602,7 @@ pub const MODE_GLOBALS: Site = Site {
 /// melee global, the fork's game_mode guard); one site, one guard.
 pub const RESULTS_MODE: Site = MODE_GLOBALS;
 
-pub const SITES: [&Site; 23] = [
+pub const SITES: [&Site; 24] = [
     &FIM_VALID,
     &FIM_EXIT,
     &AI_THINK,
@@ -600,6 +616,7 @@ pub const SITES: [&Site; 23] = [
     &RESULTS_REMATCH,
     &RESULTS_LIFETIME,
     &RESULTS_PORT,
+    &RESULTS_SAVE_OFFER,
     &RESULTS_Y,
     &RESULTS_SAVE_OPEN,
     &RESULTS_SAVE_ACCEPT,
@@ -895,6 +912,12 @@ mod tests {
         assert_eq!(RESULTS_INPUT.stock()[0], 0xa947_7bfd); // ldp x29,x30,[sp,#70]
         assert_eq!(RESULTS_CARDS.stock()[0], 0x9001_ab68); // adrp x8,52c5000
         assert_eq!(RESULTS_REMATCH.stock()[0], 0xa940_8660); // ldp x0,x1,[x19,#8]
+        // ldrb w8,[x19,#0x930] (save offered) … ldr w8,[x19,#0x928] (route) …
+        // ldrsw x8,[x19,x22] (the card's fighter index): the online save loop.
+        assert_eq!(RESULTS_SAVE_OFFER.stock()[0], 0x3964_c268);
+        assert_eq!(RESULTS_SAVE_OFFER.stock()[9], 0xb949_2a68);
+        assert_eq!(RESULTS_SAVE_OFFER.stock()[14], 0xb8b6_6a68);
+        assert_eq!(RESULTS_SAVE_OFFER.offset + 4 * 14, RESULTS_PORT.offset);
         for site in SITES.iter().filter(|s| s.kind == Kind::Relied) {
             let at = 0x1000_0000 + site.offset as u64;
             let stock = site.stock();
