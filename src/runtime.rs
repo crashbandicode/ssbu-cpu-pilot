@@ -69,7 +69,8 @@ static SETTINGS: SharedSettings = SharedSettings::new(Settings {
     auto_rematch: false,
     auto_save_replay: false,
 });
-/// The level changed on the pad; the worker saves `config.ini`.
+/// P1 or the level changed (the pad's L+R+X, or the P1 row); the worker saves
+/// `config.ini`.
 static DIRTY: AtomicBool = AtomicBool::new(false);
 /// Set (1 + controller present) at `fim_valid`, consumed at `fim_exit`.
 static FIM_CALL: AtomicU8 = AtomicU8::new(0);
@@ -199,8 +200,10 @@ unsafe fn observe() -> Seen {
 /// One P1 frame: the L+R+X combo, then the session's action.
 unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8) {
     let p = &mut *PILOT.0.get();
-    let driving = p.session.armed().is_some();
-    if p.combo.step(buttons::combo_held(raw_buttons), driving) {
+    // L+R+X steps the level whenever P1 is set to CPU (0.2.1; before, only
+    // once the CPU was driving), with or without Deluxe's window open.
+    let cpu = SETTINGS.load().pilot;
+    if p.combo.step(buttons::combo_held(raw_buttons), cpu) {
         let now = SETTINGS.update(|s| Settings {
             level: combo::next_level(s.level),
             ..s
@@ -322,6 +325,14 @@ static LAST_PILOT_TICK: AtomicU64 = AtomicU64::new(0);
 static STALE: AtomicBool = AtomicBool::new(false);
 /// One second of `nn::os` ticks (19.2 MHz).
 const STALE_TICKS: u64 = 19_200_000;
+/// A quarter second: P1's battle input mapping ran this recently.
+const BATTLE_TICKS: u64 = STALE_TICKS / 4;
+
+/// P1's final input mapping ran within the last quarter second: a battle is
+/// running and `pilot_frame` reads L+R+X from P1's pad itself.
+fn battle_frames_running() -> bool {
+    tick().saturating_sub(LAST_PILOT_TICK.load(Ordering::Acquire)) < BATTLE_TICKS
+}
 
 fn watch_battle_end() {
     if ARMED_LEVEL.load(Ordering::Acquire) == 0 {
@@ -549,6 +560,7 @@ mod menu {
         label: &'static str,
         choices: &'static [&'static str],
         values: &'static [&'static str],
+        no_persist: bool,
     ) -> OptionSpec {
         OptionSpec {
             id,
@@ -556,7 +568,7 @@ mod menu {
             choices,
             config_key: None,
             values: Some(values),
-            no_persist: false,
+            no_persist,
             tones: None,
             read_only: false,
             layout: RowLayout::Value,
@@ -564,9 +576,13 @@ mod menu {
     }
 
     static OPTIONS: [OptionSpec; 3] = [
-        row(settings::KEY_PILOT, "P1", &["Player", "CPU"], &["player", "cpu"]),
-        row(settings::KEY_REMATCH, "Auto rematch", &["Off", "On"], &["off", "on"]),
-        row(settings::KEY_SAVE, "Auto save replay", &["Off", "On"], &["off", "on"]),
+        // `Player`, `CPU (L1)` … `CPU (L9)`. Deluxe would persist the choice it
+        // asked for, but a ZR press asks for a neighbouring level and gets the
+        // Player/CPU toggle (`settings::p1_request`), so the pilot writes `p1`
+        // and `level` itself.
+        row(settings::KEY_PILOT, "P1", &settings::P1_CHOICES, &settings::P1_VALUES, true),
+        row(settings::KEY_REMATCH, "Auto rematch", &["Off", "On"], &["off", "on"], false),
+        row(settings::KEY_SAVE, "Auto save replay", &["Off", "On"], &["off", "on"], false),
     ];
 
     static SPEC: PluginSpec = PluginSpec {
@@ -585,7 +601,7 @@ mod menu {
         fn current(&self, option: usize) -> Option<usize> {
             let s = SETTINGS.load();
             match option {
-                0 => Some(usize::from(s.pilot)),
+                0 => Some(settings::p1_choice(s)),
                 1 => Some(usize::from(s.auto_rematch)),
                 2 => Some(usize::from(s.auto_save_replay)),
                 _ => None,
@@ -593,15 +609,33 @@ mod menu {
         }
 
         fn request(&self, option: usize, choice: usize) -> RequestStatus {
-            if option > 2 || choice > 1 || !ACTIVE.load(Ordering::Acquire) {
+            if !ACTIVE.load(Ordering::Acquire) {
                 return RequestStatus::Rejected;
             }
-            let on = choice == 1;
-            SETTINGS.update(|s| match option {
-                0 => Settings { pilot: on, ..s },
-                1 => Settings { auto_rematch: on, ..s },
-                _ => Settings { auto_save_replay: on, ..s },
-            });
+            match option {
+                0 if choice < settings::P1_CHOICES.len() => {
+                    // In battle P1's own pad already stepped the level for this
+                    // L+R+X press (`pilot_frame`); Deluxe's request for the
+                    // current choice must not step it again.
+                    let pad = battle_frames_running();
+                    SETTINGS.update(|s| {
+                        if pad && choice == settings::p1_choice(s) {
+                            s
+                        } else {
+                            settings::p1_request(s, choice)
+                        }
+                    });
+                    DIRTY.store(true, Ordering::Release);
+                }
+                1 | 2 if choice < 2 => {
+                    let on = choice == 1;
+                    SETTINGS.update(|s| match option {
+                        1 => Settings { auto_rematch: on, ..s },
+                        _ => Settings { auto_save_replay: on, ..s },
+                    });
+                }
+                _ => return RequestStatus::Rejected,
+            }
             RequestStatus::Applied
         }
     }

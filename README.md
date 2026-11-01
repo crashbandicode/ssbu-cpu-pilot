@@ -16,11 +16,11 @@ controller idle. Online Deluxe 0.10.0, ssbu-cpu-pilot 0.2.0 code, 10 fps.*
 Press **L+R+Down** until Online Deluxe shows the **CPU Pilot** page, then
 **ZR+Right/Left** on a row:
 
-![The CPU Pilot page: P1 CPU, Auto rematch Off, Auto save replay Off](docs/media/cpu-pilot-page-crop.png)
+![The CPU Pilot page: P1 CPU (L4), Auto rematch Off, Auto save replay Off](docs/media/cpu-pilot-page-crop.png)
 
 | Row | |
 | --- | --- |
-| P1 | **CPU** plays P1 in matches and Training, with the HUD tag `CPU Lv<n>`; menus stay yours. **L+R+X** cycles the level 1–9 (starts at 3, saved). P1 is the player again after a reboot. |
+| P1 | `Player`, or `CPU (L1)` … `CPU (L9)`: the CPU plays P1 in matches and Training, with the HUD tag `CPU Lv<n>`; menus stay yours. ZR+Right/Left switches Player ↔ CPU in one press and keeps the level. **L+R+X** steps the level 1 → 9 → 1 (starts at 3, saved): on this row (Deluxe 0.10.1 or later), or on P1's controller during a match. P1 is the player again after a reboot. |
 | Auto rematch | Answers Yes to the online "Rematch?" pop-up. |
 | Auto save replay | Saves the replay at the results screen, offline and online (then answers "Rematch?" if Auto rematch is on). |
 

@@ -21,7 +21,7 @@ version. Pin a `rev`: the API is versioned by commit until a release.
 
 | Module | Host-tested | What it gives |
 | --- | --- | --- |
-| `settings` | yes | `Settings` (P1 CPU, level 1–9, auto rematch, auto save replay), `SharedSettings` (lock-free), `parse_ini` / `write_ini` (no heap) |
+| `settings` | yes | `Settings` (P1 CPU, level 1–9, auto rematch, auto save replay), `SharedSettings` (lock-free), `parse_ini` / `write_ini` (no heap); the P1 row (0.1.1): `P1_CHOICES` (`Player`, `CPU (L1)` … `CPU (L9)`), `p1_choice`, `p1_request` (a neighbouring choice toggles Player/CPU keeping the level, the current one steps the level) |
 | `combo` | yes | `Combo::step(held, enabled)` (one level step per L+R+X press), `next_level` |
 | `level` | yes | the 13.0.5 rank ladder (`ranks`, `rank_for`); refuses a table that differs |
 | `pad` | yes | `MappedInputs` (8 bytes, the final-input-mapping output), `from_ai`, `pack` / `unpack` |

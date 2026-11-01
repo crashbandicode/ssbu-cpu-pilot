@@ -1,10 +1,11 @@
-//! L+R+X: cycles the CPU level while the CPU drives P1.
+//! L+R+X: cycles the CPU level while P1 is set to CPU.
 //!
 //! The host passes whether all three physical buttons are held this frame
 //! (read before the plugin overwrites P1's input) and whether the combo may
-//! act now (CPU driving, no menu that also uses L+R+X open). One press, one
-//! step: the combo fires on the frame all three become held, never again
-//! until one is released.
+//! act now (the plugin passes "P1 is set to CPU"). One press, one step: the
+//! combo fires on the frame all three become held, never again until one is
+//! released. Outside battle, Online Deluxe 0.10.1+ sends the same press on the
+//! P1 row as a request for its current choice (`settings::p1_request`).
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Combo {

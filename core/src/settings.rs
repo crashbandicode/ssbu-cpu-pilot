@@ -87,6 +87,45 @@ impl SharedSettings {
     }
 }
 
+/// The P1 row's choices on Online Deluxe's page (0.2.1): the player, then the
+/// CPU at each level, so the row shows the level as `CPU (L3)`.
+pub const P1_CHOICES: [&str; 10] = [
+    "Player", "CPU (L1)", "CPU (L2)", "CPU (L3)", "CPU (L4)", "CPU (L5)", "CPU (L6)", "CPU (L7)",
+    "CPU (L8)", "CPU (L9)",
+];
+/// Their `p1` INI values.
+pub const P1_VALUES: [&str; 10] = [
+    "player", "cpu", "cpu", "cpu", "cpu", "cpu", "cpu", "cpu", "cpu", "cpu",
+];
+
+/// The P1 row's choice for `s`: 0 while P1 is the player, else the CPU level.
+pub const fn p1_choice(s: Settings) -> usize {
+    if s.pilot {
+        clamp_level(s.level) as usize
+    } else {
+        0
+    }
+}
+
+/// Applies a request on the P1 row. Deluxe sends ZR+Left/Right as the
+/// neighbouring choice and, since 0.10.1, L+R+X as the current one.
+/// - Any other choice toggles Player and CPU and keeps the level, so one
+///   press always hands P1 over or takes it back.
+/// - The current choice steps the CPU level 1 → 9 → 1, and does nothing while
+///   P1 is the player.
+pub fn p1_request(s: Settings, choice: usize) -> Settings {
+    if choice != p1_choice(s) {
+        Settings { pilot: !s.pilot, ..s }
+    } else if s.pilot {
+        Settings {
+            level: crate::combo::next_level(s.level),
+            ..s
+        }
+    } else {
+        s
+    }
+}
+
 /// INI keys. They are also the Deluxe option ids, so the host's one-key
 /// rewrite and this parser agree.
 pub const KEY_PILOT: &str = "p1";
@@ -227,6 +266,51 @@ mod tests {
             }
         );
         assert_eq!(parse_ini("level=0\nlevel=10"), Settings::default());
+    }
+
+    #[test]
+    fn p1_row_shows_the_level_and_one_press_toggles_keeping_it() {
+        let player = Settings {
+            level: 4,
+            ..Settings::default()
+        };
+        let cpu = Settings {
+            pilot: true,
+            ..player
+        };
+        assert_eq!((p1_choice(player), p1_choice(cpu)), (0, 4));
+        assert_eq!(P1_CHOICES[p1_choice(cpu)], "CPU (L4)");
+        assert_eq!(P1_VALUES[p1_choice(cpu)], "cpu");
+        assert_eq!(P1_CHOICES.len(), P1_VALUES.len());
+        // ZR+Right / ZR+Left (Deluxe wraps over the 10 choices): one press.
+        assert_eq!(p1_request(player, 1), cpu);
+        assert_eq!(p1_request(player, 9), cpu);
+        assert_eq!(p1_request(cpu, 5), player);
+        assert_eq!(p1_request(cpu, 3), player);
+        let top = Settings { level: 9, ..cpu };
+        assert_eq!(p1_request(top, 0), Settings { level: 9, ..player });
+    }
+
+    #[test]
+    fn p1_row_current_choice_steps_the_cpu_level_and_wraps() {
+        let mut s = Settings {
+            pilot: true,
+            level: 1,
+            ..Settings::default()
+        };
+        let mut shown = Vec::new();
+        for _ in 0..9 {
+            s = p1_request(s, p1_choice(s));
+            shown.push(P1_CHOICES[p1_choice(s)]);
+        }
+        assert_eq!(
+            shown,
+            ["CPU (L2)", "CPU (L3)", "CPU (L4)", "CPU (L5)", "CPU (L6)", "CPU (L7)", "CPU (L8)", "CPU (L9)", "CPU (L1)"]
+        );
+        assert!(s.pilot);
+        // While P1 is the player the current choice changes nothing.
+        let player = Settings::default();
+        assert_eq!(p1_request(player, 0), player);
     }
 
     #[test]
