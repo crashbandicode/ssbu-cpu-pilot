@@ -257,6 +257,27 @@ with `libnro_hook.nro`, `libparam_hook.nro` and the tile cursor; the fork's
 
 Both runs: 0 panic/abort/crash in `console.log`.
 
+The same branch on the v0.2.1 library (2026-11-01): `cpu-pilot-lib` at
+`d84b9a8` pins `ssbu-cpu-pilot-core` to tag `v0.2.1` (0.1.1, `8b03e3b`). The
+modules the fork uses (`native`, `level`, `pad`) are unchanged since `0162eed`.
+`training_mod_consts` 211 tests pass; `--features enhancements-alpha` release
+build and skyline clippy: 0 warnings, NRO `606d59d9…` (4,190,208 B). On the Ally,
+with the saved menu "P1 CPU Control" On and level 9 (written with the fork's own
+types and parsed back by its loader), no menu navigation:
+
+- **k03, the fork alone, pass:** `[CpuPilot] offline_probe_ready` at boot;
+  entering Training, `menu_control event=armed level=9 rank=100 …
+  scope: OfflineTraining … slot: 0`; P1 attacked with no host input (R.O.B. 0 →
+  2.5% in 6 s).
+- **k04, the fork with this plugin's 0.2.1 release and Online Deluxe 0.10.1,
+  pass:** the fork logged `standalone_pilot_present …; fork pilot hooks not
+  installed` and never armed, its menu On notwithstanding; Deluxe's CPU Pilot
+  page `Player` → ZR+Right `CPU (L3)`, tag `CPU Lv3`, P1 fought alone (Daisy 0 →
+  12.9%); ZR+Left: `Player`, tag `intpater`.
+
+Both: no panic/abort/crash event in `eden_log.txt` (2,177 and 5,064 lines; the
+one match is the setting name), run folders deleted, RELEASED.
+
 ### smash-gamepad-overlay reading this plugin's state (g01–g04)
 
 The overlay's bridge reads `ssbu_cpu_pilot_state_v1` and, while `armed_level`
