@@ -211,5 +211,30 @@ with `libnro_hook.nro`, `libparam_hook.nro` and the tile cursor; the fork's
 
 Both runs: 0 panic/abort/crash in `console.log`.
 
-**Not yet run in Eden:** the smash-gamepad-overlay bridge (a branch of that
-repo), a replay A/B with the detector.
+### smash-gamepad-overlay reading this plugin's state (g01–g04)
+
+The overlay's bridge reads `ssbu_cpu_pilot_state_v1` and, while `armed_level`
+is non-zero, draws the CPU's last input instead of the physical pad. Surface
+`:78`, Training, this plugin's diag `582f5c2` (`fe5bf7f0…`), ARCropolis, the
+overlay's `layout.arc` and default `config.json`, the host pad idle while the
+CPU drove P1.
+
+- **g01, overlay `232006b`, its own draw hook, pass:** host input lit ZR, A
+  and the stick; `p1=cpu`: `arm level=9 … slot=0`, "CPU Lv9", the overlay's
+  stick and A/B followed the CPU over a 29-frame burst; `p1=player`:
+  `release restored=true`, the overlay followed the host pad again.
+- **g02, the same with the Training Modpack (its non-draw path), pass**, with
+  one defect in both: X lit in every CPU frame, because the pilot's input
+  carries the tap-jump flag at rest and the bridge mapped it to X.
+- **g03, the overlay's text fallback (no layout), partial:** the text line
+  follows the CPU, but that fallback writes P1's `set_txt_00`, the pane that
+  carries this plugin's "CPU Lv9" tag, so the tag does not show in that mode.
+- **g04, overlay `e4bd87d` (tap-jump flag no longer mapped), pass:** X lit in
+  2 of 29 CPU frames, when the CPU jumped.
+
+All four: 0 panic/abort/crash in `console.log`. The overlay's `v0.2.0`
+(`a00d41b`) differs from `e4bd87d` only in README, version and `Cargo.lock`.
+
+**Not yet run in Eden:** a replay A/B with the detector; this plugin's
+release build (only its diag build, from the same code, ran); the card's
+2026-11-01 plugin set (c13 used the 2026-10-31 set).

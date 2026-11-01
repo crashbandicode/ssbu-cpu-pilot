@@ -23,25 +23,25 @@ P1 always starts as the player after a boot. Offline battles need a native
 CPU present (Training, local Smash). Online, in a 1v1 Quickplay match, the
 CPU drives the local player: the plugin starts the AI service's stage
 analysis on this console under a private copy of the AI random stream, so
-the opponent's console only ever receives ordinary inputs. Two asymmetric
-Eden matches (plugin console against a vanilla one) passed the desync
-detector's end check; switching mid-match, a replay A/B and broader
-simulation-state checks are still to be tested ([docs/ONLINE.md](docs/ONLINE.md),
-[docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md)).
+the opponent's console only ever receives ordinary inputs. Asymmetric Eden
+matches (plugin console against a vanilla one), including switching on and
+off mid-match, passed the desync detector's end check; a replay A/B and
+broader simulation-state checks are still to be tested
+([docs/ONLINE.md](docs/ONLINE.md), [docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md)).
 
 Results automation presses buttons for P1's port only, each step gated on
 the game's own state, and stops for that results screen when a step does not
 happen in time ([docs/RESULTS.md](docs/RESULTS.md)).
 
-*Status (2026-10-31): experimental, not yet released. Tested in Eden:
-P1 as CPU in Training (on and off mid-fight, L+R+X, the HUD tag), the
+*Status (2026-11-01): v0.1.0, experimental. Tested in Eden with the diag
+build of the same code: P1 as CPU in Training (on and off mid-fight, L+R+X, the HUD tag), the
 Deluxe rows, the card's other 16 plugins alongside, auto save replay in a
 local match, and the CPU driving the local player online, switched on and
 off mid-match, against a vanilla console with the desync detector on both
 (`desync_seen=0` at the same frame), and auto rematch answering Yes on the
 online pop-up, with the rematch played and both sessions checked by the
-detector. Evidence: [docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md). Not tested
-on a Switch.*
+detector. Evidence: [docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md). Not yet
+run on a Switch.*
 
 ![CPU pilot approaching and attacking in an online match](docs/media/online-pilot.gif)
 
@@ -64,6 +64,12 @@ Copy `libssbu_cpu_pilot.nro` to
 folder is `sd:/ultimate/ssbu-cpu-pilot/` (`events.log`, `config.ini`).
 Online Deluxe 0.5.3 or later shows the rows; without it the plugin has no
 menu.
+
+[smash-gamepad-overlay](https://git.syntaxbyexample.com/intpa/smash-gamepad-overlay)
+v0.2.0 or later shows the CPU's inputs while it drives P1. Some Training
+Modpack builds carry their own P1-as-CPU option; leave it off while this
+plugin drives P1 (the modpack branch `cpu-pilot-lib` defers to this plugin
+on its own).
 
 ## Build
 
