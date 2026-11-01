@@ -574,7 +574,9 @@ mod menu {
         label: "CPU Pilot",
         options: &OPTIONS,
         config_path: Some(model::CONFIG_INI),
-        own_page: false,
+        // Its own page in Deluxe's window cycle, titled "CPU Pilot": Deluxe
+        // 0.10.0 shows or hides it on its own, apart from other plugins.
+        own_page: true,
     };
 
     struct Handler;
