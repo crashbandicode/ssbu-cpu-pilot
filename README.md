@@ -12,7 +12,7 @@ to Deluxe's Plugins page:
 
 | Row | Choices | What it does |
 | --- | --- | --- |
-| P1 | Player / CPU | The CPU drives P1's pad, and P1's HUD tag reads "CPU Lv<n>". While it does, **L+R+X** on P1's controller cycles the CPU level 1–9. |
+| P1 | Player / CPU | The CPU drives P1's pad, and P1's HUD tag reads "CPU Lv<n>". While it does, **L+R+X** on P1's controller cycles the CPU level 1–9 (it starts at 3 and is saved). |
 | Auto rematch | Off / On | Online, answers Yes on the ordinary Quickplay/Elite "Rematch?" pop-up. |
 | Auto save replay | Off / On | Offline, saves the replay from the results screen through the game's own Save Replay dialog. |
 
@@ -40,13 +40,16 @@ local match, and the CPU driving the local player online, switched on and
 off mid-match, against a vanilla console with the desync detector on both
 (`desync_seen=0` at the same frame), and auto rematch answering Yes on the
 online pop-up, with the rematch played and both sessions checked by the
-detector. Evidence: [docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md). Not yet
-run on a Switch.*
+detector. The v0.1.0 release build also ran in Eden with the full card set
+it was installed with (16 plugins). Evidence:
+[docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md). Not yet run on a Switch.*
 
-![CPU pilot approaching and attacking in an online match](docs/media/online-pilot.gif)
+![Online Deluxe's Plugins page: P1 switched from Player to CPU, then the CPU fights on its own](docs/media/menu-takeover.gif)
 
-*Native CPU approach and attacks during asymmetric Quickplay; the match
-continues beyond the clip. Eden `o03`, 2026-10-31, diag NRO `e63b3cc3c648650d`; every second frame.*
+*Online Deluxe's Plugins page (top right): ZR+Right turns P1 from Player to
+CPU, the tag becomes "CPU Lv9" (level set with L+R+X beforehand), the menu is
+hidden and the CPU fights on its own. Eden `m01` (Windows), 2026-11-01, v0.1.0
+release NRO `24184fe3`; 10 fps.*
 
 ## Library
 
@@ -63,7 +66,9 @@ Copy `libssbu_cpu_pilot.nro` to
 `sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/`. Its data
 folder is `sd:/ultimate/ssbu-cpu-pilot/` (`events.log`, `config.ini`).
 Online Deluxe 0.5.3 or later shows the rows; without it the plugin has no
-menu.
+menu. If Deluxe's Plugins page is hidden (`hide_pages=plugins` in its
+`config.ini`), open Window Options with L+R+Down and set PluginsPage to Shown
+with ZR+Right.
 
 [smash-gamepad-overlay](https://git.syntaxbyexample.com/intpa/smash-gamepad-overlay)
 v0.2.0 or later shows the CPU's inputs while it drives P1. Some Training

@@ -235,6 +235,39 @@ CPU drove P1.
 All four: 0 panic/abort/crash in `console.log`. The overlay's `v0.2.0`
 (`a00d41b`) differs from `e4bd87d` only in README, version and `Cargo.lock`.
 
-**Not yet run in Eden:** a replay A/B with the detector; this plugin's
-release build (only its diag build, from the same code, ran); the card's
-2026-11-01 plugin set (c13 used the 2026-10-31 set).
+### v0.1.0 release on the 2026-11-01 card set (v03) and the README GIF (m01)
+
+2026-11-01, the Ally (Windows 11, AMD Radeon iGPU), Eden-GIF `b3e672c4`
+(`5a4ed955f1`), `eden.exe` sha256 `d455ae54…936a`, an isolated portable run
+folder per label (the shared Eden user folder unchanged), the v0.1.0 release
+NRO `24184fe3…`. Release builds write only their install line, so the checks
+below come from game frames (Eden's recorder; `ui.screenshot` returns black for
+the Vulkan surface on that host).
+
+- **v03, pass:** the 16 NROs installed on the Switch (hashes equal to the
+  install receipt), the card's Deluxe `config.ini`, plus the tile cursor. Every
+  plugin installed: this plugin `plugin=ssbu-cpu-pilot/0.1.0 level=3 …
+  results_rematch=guest … result=installed heap_allocations=0 menu=registered
+  menu_allocations=38`, elite-rematch, quiet-elite-switch and gsp-visualizer
+  `result=installed heap_allocations=0`, the desync detector, Deluxe
+  `build=0.9.0-…`, the overlay `c38-b11-a00d41b`, ARCropolis 4.1.1, the
+  Training Modpack. The card's Deluxe INI hides the Plugins page
+  (`hide_pages=plugins,own_pages,performance`); Window Options, PluginsPage →
+  Shown, then the Plugins page lists `CPU Pilot`. P1 → CPU: row `CPU`, tag
+  `CPU Lv3` (the default level), P1 fought with no host input (Lucina 0 →
+  20.8%), the overlay (v0.2.0) lit the CPU's buttons. P1 → Player: tag back,
+  the host stick moved P1. L+R+X: `CPU Lv4` after one press, `CPU Lv9` after
+  six; the level stayed over Player → CPU. Quit Training clean. `eden_log.txt`
+  15,159 lines, no panic/abort/crash event (one match is the setting name
+  `cpuopt_ignore_memory_aborts`); memory peak 6,208,217,088 B.
+- **m01, the README GIF:** this plugin, Deluxe and imgui_smash from the card,
+  the tile cursor. From the recorder's start: L+R+Down at 0.5 s and 1.3 s (the
+  Plugins page, P1 `Player`), ZR+Right at 2.5 s (P1 `CPU`, tag `CPU Lv9` from
+  about 2.6 s; the level was set with L+R+X before recording), L+R+Down at 4.3 s
+  and 4.9 s (menu hidden), then P1 fought alone (Jigglypuff 0 → 19.2%). The
+  Deluxe chord also reaches the game, so P1 dodges while the menu opens. Eden's
+  own GIF (take 2), 1280×720, 95 frames at 10 fps with none dropped, 13.71 MB,
+  sha256 `70f7bb4d…894f`; a 960-wide take of the same schedule was 8.03 MB but
+  the menu text was too small to read.
+
+**Not yet run in Eden:** a replay A/B with the detector.
