@@ -69,9 +69,15 @@ calls `1d5b590(cards, port)` for each of the eight cards with the card fighter's
 (`1d59d8c`..`1d59de0`). `1d5b590` requires modal mask `[[main+593b988]+8] <= 1`, Y pressed on
 that port's record, and the replay predicate `175bf90(0)`, whose mode switch admits online melee
 `0x0e` (bit 14 of mask `0x1ffcf8f`) and refuses Training `0x0d`; then it parses the Save record,
-displays it and publishes status 1, the same chain as offline. The "Rematch?" pop-up (`147fb64`)
-is shown over the winner splash about 21 s after `epoch=begin` (Eden r02 frames), so the save runs
-first and the rematch after it.
+displays it and publishes status 1, the same chain as offline. The online winner splash counts
+down (about 15 s) and, when nobody presses A, goes straight to "Rematch?" without the cards: in
+Eden s02 the cards hook (`1d59560`) never ran and the save step logged `flow=timeout step=Cards`
+21.0 s after `epoch=begin`. With A on the splash (s03, s04) the cards came up about 7 s after
+`epoch=begin` (`cards=sample … route=1 offered=1 … phase=2 pending=2 … ready=1 … ports=-1,0`:
+the local player was fighter entry 1, on UI port 0) with their own 15 s countdown; the save ran
+to status 5 by +8.3 s, the countdown kept running through the dialog, and "Rematch?" (`147fb64`)
+came when it ended: the plugin answered it at +22.1 to +22.2 s, as in r02 without a save
+(+22.34 s). So the save runs first and the rematch after it.
 
 Each frame means one completed UI-builder invocation; seconds below assume
 60 Hz and are not measured. Settings bind per epoch; disabling, scene/port
@@ -83,12 +89,12 @@ epoch without retry. A late signal cannot restart it.
    and the Y prompt appeared only after manual A presses). While no cards
    sample of this epoch exists, press A on the splash: the first 90 frames
    after epoch begin, then another every 60 frames (A pulse as below, 17
-   frames long), at most 3 per epoch. Each is logged as
+   frames long), at most 12 per epoch. Each is logged as
    `save=press_a_splash n=<k>`. The moment any cards sample for the epoch
    arrives, ready or not (including one whose port could not be read), no A is
    ever pressed again in that epoch, and an A still held is released at once
-   on its own port. Never on Training, replay playback, any unsupported scene,
-   online, or with `auto_save_replay` off. **Assumption Eden must confirm:**
+   on its own port. Online too (step 6). Never on Training, replay playback,
+   any unsupported scene, or with `auto_save_replay` off. **Assumption Eden must confirm:**
    no fighter-entry mapping exists before the cards, so the splash A goes to
    UI port 0 (P1's controller) and to no other port; the later Y/Right/A
    still use the cards' port (`cards_port`), which may differ.
@@ -110,8 +116,10 @@ epoch without retry. A late signal cannot restart it.
    is failure. Completion requires the entire owned 0->1->2->3->5 chain;
    no replay-commit hook is needed, and byte-level replay persistence is not
    independently observed by this plugin.
-6. Online with Auto save on: steps 1 to 5 as offline (no splash A; the online
-   splash advances alone), on the mapped port. The save's end (completed,
+6. Online with Auto save on: steps 0 to 5 as offline, on the mapped port. The
+   splash A (step 0) is never pressed while a pop-up is opening or shown, and
+   one already held is released when a pop-up starts; without it the online
+   splash counts down to "Rematch?" with no cards (Eden s02). The save's end (completed,
    failed, timed out or given up) moves on to the rematch when Auto rematch
    is on, otherwise ends the epoch; a "Rematch?" record parsed before Y was
    pressed gives the save up (`save=late_rematch_popup`). The rematch's
@@ -143,12 +151,13 @@ Mode reads follow the supplied game_mode guard. The local `0101xxxx` allowlist
 is inferred from the replay plugin's `guards.rs` live-mode fixture; online is
 `07xxxxxx`. Their values during results still need runtime qualification.
 Other modes, including training, playback and local wireless, do not save.
-The splash A (core tests `splash_a_*`, `no_splash_a_*`, `full_save_sequence_still_*`)
-is host-tested only: whether UI port 0 reaches the splash, whether 1 to 3 As
-advance it, and whether a cards sample is taken on the first cards frame are
-all unverified. Online UI port acceptance, local P1 mapping, effective Right input, one
-callback per frame, transient decision visibility, timing, storage failure,
-actual replay creation, and rematch countdown completion remain unverified.
+The splash A (core tests `splash_a_*`, `no_splash_a_*`, `full_save_sequence_still_*`,
+`online_splash_a_*`) reached the splash on UI port 0 in Eden offline (c19) and online
+(s03, s04): each time the cards followed the sixth A, about 7 to 8 s after `epoch=begin`.
+Online (s03, s04) UI port 0 also carried Y, Right and A, the local player was fighter
+entry 1 mapped to UI port 0, and each save wrote a replay file. One callback per frame,
+transient decision visibility, storage failure and a save overlapping the "Rematch?"
+pop-up remain unverified.
 Offline rematch is omitted because CSS/stage/start signals were not proven.
 
 Diagnostics emit transition lines with this literal format (numbers vary):
@@ -156,10 +165,15 @@ Diagnostics emit transition lines with this literal format (numbers vary):
 Offline, zero to twelve `save=press_a_splash n=1..12` lines (port=0) may precede the
 save tokens, and none follows `save=press_y`. For a save, require in order `save=press_y`, `save=select_yes`, `save=confirm`,
 `save=writing`, `save=close_success`, `save=completed` with final status=5.
-Online with both rows on, require the same save tokens through `save=completed` and then
-`rematch=press_a` and `rematch=accepted`; the diag build also logs one
-`cards=sample route=N offered=N finished=N phase=N pending=N state0=N state1=N ready=N`
-line per epoch at the first cards sample. Install must show `results_cards=stock/near` (or `/far`),
+Online the same splash lines (on the mapped port) and save tokens through `save=completed`;
+with Auto rematch on, then `rematch=press_a` and `rematch=accepted`.
+`python3 -I tools/results_timeline.py <events.log>` prints each epoch's lines as offsets
+from `epoch=begin` and checks that order (`save=ok`) and the rematch outcome
+(`tools/test_results_timeline.py`). The diag build also logs a
+`cards=sample n=K route=N offered=N no_save=N finished=N phase=N pending=N state0=N state1=N
+modal=N idle=N ready=N fresh=N status=N ports=A,B` line whenever one of those cards fields
+changes (at most 32 per epoch; `ports` are the raw port-table values of fighter entries 0 and 1).
+Install must show `results_cards=stock/near` (or `/far`),
 `results_input=stock/near` (or `/far`), and `rematch_ready=1`; shared-site role is
 `results_rematch=guest` or `results_rematch=owner:stock/near` (or a recognized chain/branch and near/far).
 For failure tests, require `flow=timeout step=...`, `save=failed_status_4`,

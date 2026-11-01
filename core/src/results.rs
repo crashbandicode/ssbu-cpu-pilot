@@ -22,8 +22,9 @@ pub const CARDS_TIMEOUT: u16 = 1200;
 pub const SPLASH_SETTLE: u16 = 90;
 pub const SPLASH_GAP: u16 = 60;
 pub const SPLASH_MAX: u8 = 12;
-/// Before the cards sample there is no fighter-entry port mapping. The splash A
-/// goes to UI port 0 (P1's controller): an assumption Eden must confirm.
+/// Offline, before the cards sample there is no fighter-entry port mapping. The
+/// splash A goes to UI port 0 (P1's controller; Eden c19). Online the splash A
+/// rides the local entry's mapped port, like the rest of the save.
 pub const SPLASH_PORT: u8 = 0;
 pub const DIALOG_TIMEOUT: u16 = 180;
 pub const SAVE_TIMEOUT: u16 = 900;
@@ -274,8 +275,9 @@ pub struct Results {
     /// Latched: a cards sample existed in this epoch. Ends the splash presses.
     cards_seen: bool,
     splash: u8,
-    /// The in-flight pulse is a splash A, which rides `SPLASH_PORT`, not `port`.
+    /// The in-flight pulse is a splash A, which rides `splash_port`, not `port`.
     splash_pulse: bool,
+    splash_port: u8,
 }
 
 impl Default for Results {
@@ -302,6 +304,7 @@ impl Results {
             cards_seen: false,
             splash: 0,
             splash_pulse: false,
+            splash_port: SPLASH_PORT,
         }
     }
     pub fn stage(&self) -> Stage {
@@ -314,7 +317,7 @@ impl Results {
     /// Port carrying the in-flight pulse. Read it before cancelling or stepping.
     fn lane(&self) -> Option<u8> {
         if self.splash_pulse && !self.pulse.idle() {
-            Some(SPLASH_PORT)
+            Some(self.splash_port)
         } else {
             self.port
         }
@@ -362,18 +365,34 @@ impl Results {
             event: Some(event),
         }
     }
-    /// A on the winner splash, before any cards sample. Restarts the Cards
-    /// deadline so the presses never eat into it.
-    fn press_splash(&mut self) -> Output {
+    /// A on the winner splash, before any cards sample, on `port`. Restarts the
+    /// Cards deadline so the presses never eat into it.
+    fn press_splash(&mut self, port: u8) -> Output {
         self.go(Stage::Cards);
         self.splash = self.splash.saturating_add(1);
         self.splash_pulse = true;
+        self.splash_port = port;
         self.pulse.start(A);
         Output {
             input: self.pulse.step(),
-            port: Some(SPLASH_PORT),
+            port: Some(port),
             event: Some(Event::SplashA(self.splash)),
         }
+    }
+    /// The next splash A is due: still waiting for the first cards sample, under
+    /// the press cap, the settle delay or the gap since the last press elapsed,
+    /// and no pulse in flight.
+    fn splash_due(&self) -> bool {
+        let due = if self.splash == 0 {
+            SPLASH_SETTLE
+        } else {
+            SPLASH_GAP
+        };
+        self.stage == Stage::Cards
+            && !self.cards_seen
+            && self.splash < SPLASH_MAX
+            && self.age >= due
+            && self.pulse.idle()
     }
     fn wait(&mut self) -> Output {
         let port = self.lane();
@@ -444,7 +463,10 @@ impl Results {
         // Stop holding an A still in flight: its release goes to its own port.
         let first_sample = f.cards_seen && !self.cards_seen;
         self.cards_seen |= f.cards_seen;
-        if first_sample && self.splash_pulse && !self.pulse.idle() {
+        // A pop-up opening or shown (online the "Rematch?" one comes over the
+        // splash) also stops a splash A in flight: the A must never reach it.
+        let popup_busy = f.popup.is_some_and(|p| p.phase != 0 || p.opening);
+        if (first_sample || popup_busy) && self.splash_pulse && !self.pulse.idle() {
             let port = self.lane();
             return Output {
                 input: self.pulse.cancel(),
@@ -474,19 +496,8 @@ impl Results {
         }
         if self.port.is_none() {
             // Offline, no cards sample yet: the winner splash is on screen.
-            let due = if self.splash == 0 {
-                SPLASH_SETTLE
-            } else {
-                SPLASH_GAP
-            };
-            if self.stage == Stage::Cards
-                && self.scene == Scene::Offline
-                && !self.cards_seen
-                && self.splash < SPLASH_MAX
-                && self.age >= due
-                && self.pulse.idle()
-            {
-                return self.press_splash();
+            if self.scene == Scene::Offline && self.splash_due() {
+                return self.press_splash(SPLASH_PORT);
             }
             return self.wait();
         }
@@ -502,6 +513,14 @@ impl Results {
             }
             Stage::Cards if f.cards_ready && f.save_status == Some(0) => {
                 return self.press(Y, Stage::SaveDialog, Event::SaveY);
+            }
+            // Online the winner splash counts down to "Rematch?" and shows no
+            // cards unless A is pressed on it (Eden s02), as offline (c17–c19).
+            // The A rides the mapped port, never while a pop-up opens or shows.
+            Stage::Cards if self.scene == Scene::Online && !popup_busy && self.splash_due() => {
+                if let Some(port) = self.port {
+                    return self.press_splash(port);
+                }
             }
             Stage::SaveDialog => {
                 if f.save_status.is_some_and(|s| s != 0 && s != 1) {
@@ -708,6 +727,19 @@ mod tests {
             cards_seen: false,
             cards_ready: false,
             save_status: None,
+            ..frame()
+        }
+    }
+    /// Online winner splash (Eden s02): no cards sample, the local entry on UI
+    /// port 1 here, the pop-up wrapper idle (phase 0), save status 0.
+    fn online_splash() -> Frame {
+        Frame {
+            scene: Scene::Online,
+            port: Some(1),
+            cards_seen: false,
+            cards_ready: false,
+            save_status: Some(0),
+            popup: Some(Popup::default()),
             ..frame()
         }
     }
@@ -1347,7 +1379,7 @@ mod tests {
         assert_eq!((o.input.released, o.port), (A, Some(SPLASH_PORT)));
     }
     #[test]
-    fn splash_a_never_presses_in_training_playback_unsupported_online_or_save_off() {
+    fn splash_a_never_presses_in_training_playback_unsupported_or_save_off() {
         let steps = SPLASH_SETTLE + 4 * SPLASH_GAP;
         // (melee, mode): Training, replay playback, unknown family, nothing.
         for (melee, mode) in [(0x0d, 0x0201_0000), (0, 0x0501_0100), (0x20, 0x0404_0000), (0, 0)] {
@@ -1361,16 +1393,11 @@ mod tests {
                 assert_eq!(r.step(f, settings()).input, Input::default());
             }
         }
-        // Online waits for the cards without splash presses: the online splash
-        // advances by itself (Eden r01/r02).
+        // Online with Auto save off (the rematch alone) never presses the splash.
         let mut r = Results::new();
-        let f = Frame {
-            scene: Scene::Online,
-            port: Some(0),
-            ..splash()
-        };
+        let f = online_splash();
         for _ in 0..steps {
-            let o = r.step(f, settings());
+            let o = r.step(f, rematch_only());
             assert_eq!(o.input, Input::default());
             assert!(!matches!(o.event, Some(Event::SplashA(_))));
         }
@@ -1433,5 +1460,107 @@ mod tests {
         for _ in 0..(3 * SPLASH_GAP + 500) {
             assert_eq!(r.step(f, settings()), Output::default());
         }
+    }
+    #[test]
+    fn online_splash_a_rides_the_mapped_port_until_the_cards_then_saves_and_answers() {
+        let mut r = Results::new();
+        let mut f = online_splash();
+        assert_eq!(r.step(f, settings()).event, Some(Event::Begin));
+        let mut presses = Vec::new();
+        for n in 1..=(SPLASH_SETTLE + SPLASH_GAP + 10) {
+            let o = r.step(f, settings());
+            if o.input != Input::default() {
+                assert_eq!(o.port, Some(1));
+            }
+            if o.input.pressed != 0 {
+                assert_eq!(o.input.pressed, A);
+                presses.push(n);
+                assert_eq!(o.event, Some(Event::SplashA(presses.len() as u8)));
+            }
+        }
+        assert_eq!(presses, [SPLASH_SETTLE, SPLASH_SETTLE + SPLASH_GAP]);
+        // The cards come up (not ready yet): no further A, no Y.
+        f.cards_seen = true;
+        for _ in 0..(2 * SPLASH_GAP) {
+            assert_eq!(r.step(f, settings()).input.pressed, 0);
+        }
+        // Ready: Y on the mapped port, then the whole save, then the rematch.
+        f.cards_ready = true;
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed, o.port), (Some(Event::SaveY), Y, Some(1)));
+        assert_eq!(save_chain(&mut r, &mut f).event, Some(Event::Saved));
+        assert_eq!(r.stage(), Stage::Rematch);
+        f.save_status = Some(0);
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(popup(REMATCH_RECORD));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed, o.port), (Some(Event::RematchA), A, Some(1)));
+        assert_eq!(r.splash, 2);
+    }
+    #[test]
+    fn online_splash_a_never_reaches_a_popup_and_a_parsed_rematch_ends_the_presses() {
+        // A pop-up opening or shown before the first press: no splash A at all.
+        for busy in [
+            Popup {
+                opening: true,
+                ..Popup::default()
+            },
+            popup(REMATCH_RECORD),
+        ] {
+            let mut r = Results::new();
+            let f = Frame {
+                popup: Some(busy),
+                ..online_splash()
+            };
+            r.step(f, settings());
+            for _ in 0..(SPLASH_SETTLE + 4 * SPLASH_GAP) {
+                assert_eq!(r.step(f, settings()).input, Input::default());
+            }
+            assert_eq!(r.splash, 0);
+        }
+        // A pop-up starting while the A is held: released at once on its port.
+        let mut r = Results::new();
+        let mut f = online_splash();
+        r.step(f, settings());
+        while r.step(f, settings()).input.pressed != A {}
+        f.popup = Some(Popup {
+            phase: 1,
+            ..Popup::default()
+        });
+        let o = r.step(f, settings());
+        assert_eq!((o.input.held, o.input.pressed, o.input.released), (0, 0, A));
+        assert_eq!(o.port, Some(1));
+        for _ in 0..(2 * SPLASH_GAP) {
+            assert_eq!(r.step(f, settings()).input, Input::default());
+        }
+        // The "Rematch?" record parsed: the save is given up, the rematch answered.
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(popup(REMATCH_RECORD));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed), (Some(Event::SaveLate), 0));
+        let o = r.step(f, settings());
+        assert_eq!((o.event, o.input.pressed, o.port), (Some(Event::RematchA), A, Some(1)));
+        assert_eq!(r.splash, 1);
+        // Without Auto rematch the same pop-up only ends the epoch: nothing pressed.
+        let s = Settings {
+            auto_rematch: false,
+            ..settings()
+        };
+        let mut r = Results::new();
+        let mut f = online_splash();
+        r.step(f, s);
+        for _ in 0..SPLASH_SETTLE {
+            r.step(f, s);
+        }
+        f.rematch_epoch = f.epoch;
+        f.popup = Some(popup(REMATCH_RECORD));
+        let mut events = Vec::new();
+        for _ in 0..(4 * SPLASH_GAP) {
+            let o = r.step(f, s);
+            assert_eq!(o.input.pressed, 0);
+            events.extend(o.event);
+        }
+        assert_eq!(events, [Event::SaveLate]);
+        assert_eq!(r.stage(), Stage::End);
     }
 }

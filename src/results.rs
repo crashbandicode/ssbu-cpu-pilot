@@ -31,17 +31,52 @@ struct State {
     #[cfg(feature = "diag")]
     cards: CardsDiag,
 }
-/// The cards' fields behind the readiness test, logged once per epoch so an
-/// Eden run shows what the online results offered (`+0x928` route, `+0x930`
-/// save offered, `+0x924` finished, the first two cards' states).
+/// The cards' fields behind the readiness test, logged whenever one changes
+/// (at most `CARDS_LINES` lines per epoch) so an Eden run shows when the
+/// online results offered the save and which field held it back: `+0x928`
+/// route, `+0x930` save offered, `+0x910` no-save mode, `+0x924` finished,
+/// the cards' phase and pending, the first two cards' states, the modal mask,
+/// the pop-up idle test, the save status and the first two entries' UI ports.
 #[cfg(feature = "diag")]
-struct CardsDiag {
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CardsSig {
     route: u32,
     offered: u8,
+    no_save: u8,
     finished: u8,
     phase: i32,
     pending: i32,
     state: [i32; 2],
+    modal: u32,
+    idle: u8,
+    ready: u8,
+    status: i32,
+    ports: [i32; 2],
+}
+#[cfg(feature = "diag")]
+const CARDS_SIG: CardsSig = CardsSig {
+    route: 0,
+    offered: 0,
+    no_save: 0,
+    finished: 0,
+    phase: 0,
+    pending: 0,
+    state: [0; 2],
+    modal: 0,
+    idle: 0,
+    ready: 0,
+    status: 0,
+    ports: [0; 2],
+};
+#[cfg(feature = "diag")]
+const CARDS_LINES: u8 = 32;
+#[cfg(feature = "diag")]
+struct CardsDiag {
+    /// The latest sample, written by the cards hook.
+    now: CardsSig,
+    /// The last logged sample of `logged_epoch`, `None` before the first.
+    last: Option<CardsSig>,
+    lines: u8,
     logged_epoch: usize,
 }
 static STATE: Owned<State> = Owned(UnsafeCell::new(State {
@@ -55,12 +90,9 @@ static STATE: Owned<State> = Owned(UnsafeCell::new(State {
     last_epoch: 0,
     #[cfg(feature = "diag")]
     cards: CardsDiag {
-        route: 0,
-        offered: 0,
-        finished: 0,
-        phase: 0,
-        pending: 0,
-        state: [0; 2],
+        now: CARDS_SIG,
+        last: None,
+        lines: 0,
         logged_epoch: 0,
     },
 }));
@@ -171,14 +203,28 @@ unsafe extern "C" fn cards(ctx: &mut InlineCtx) {
         s.cards_port = port;
         #[cfg(feature = "diag")]
         {
-            s.cards.route = read(c + 0x928);
-            s.cards.offered = read(c + 0x930);
-            s.cards.finished = read(c + 0x924);
-            s.cards.phase = read(c + 0xf8);
-            s.cards.pending = pending(c).unwrap_or(-1);
-            s.cards.state = [read(c + 0x118), read(c + 0x218)];
+            s.cards.now = CardsSig {
+                route: read(c + 0x928),
+                offered: read(c + 0x930),
+                no_save: read(c + 0x910),
+                finished: read(c + 0x924),
+                phase: read(c + 0xf8),
+                pending: pending(c).unwrap_or(-1),
+                state: [read(c + 0x118), read(c + 0x218)],
+                modal: singleton(0x593b988).map_or(u32::MAX, |p| read::<u32>(p)),
+                idle: u8::from(idle),
+                ready: u8::from(ready),
+                status: status().unwrap_or(-1),
+                ports: [raw_entry_port(0), raw_entry_port(1)],
+            };
         }
     });
+}
+
+/// The port table's raw value for `entry` (-1 unmapped, -2 no table), diag only.
+#[cfg(feature = "diag")]
+unsafe fn raw_entry_port(entry: usize) -> i32 {
+    pointer(base() + 0x52c50f0).map_or(-2, |t| read::<i32>(t + 0x298 + entry * 4))
 }
 
 /// Shared callback is an observer. It never reparses, writes registers, or
@@ -230,23 +276,39 @@ pub unsafe fn frame(records: *mut [policy::Record; 10], settings: Settings) {
             None
         };
         #[cfg(feature = "diag")]
-        if cards_seen && s.cards.logged_epoch != e {
-            s.cards.logged_epoch = e;
-            runtime::diag_event(format_args!(
-                "results epoch={:#x} port={} cards=sample route={} offered={} finished={} phase={} pending={} state0={} state1={} ready={} status={} mode={:#x}",
-                e,
-                port.unwrap_or(255),
-                s.cards.route,
-                s.cards.offered,
-                s.cards.finished,
-                s.cards.phase,
-                s.cards.pending,
-                s.cards.state[0],
-                s.cards.state[1],
-                u8::from(fresh_cards && s.cards_ready),
-                status().unwrap_or(-1),
-                read::<u32>(base() + 0x53050f0)
-            ));
+        if cards_seen {
+            if s.cards.logged_epoch != e {
+                s.cards.logged_epoch = e;
+                s.cards.last = None;
+                s.cards.lines = 0;
+            }
+            let c = s.cards.now;
+            if s.cards.last != Some(c) && s.cards.lines < CARDS_LINES {
+                s.cards.last = Some(c);
+                s.cards.lines += 1;
+                runtime::diag_event(format_args!(
+                    "results epoch={:#x} port={} cards=sample n={} route={} offered={} no_save={} finished={} phase={} pending={} state0={} state1={} modal={} idle={} ready={} fresh={} status={} ports={},{} mode={:#x}",
+                    e,
+                    port.unwrap_or(255),
+                    s.cards.lines,
+                    c.route,
+                    c.offered,
+                    c.no_save,
+                    c.finished,
+                    c.phase,
+                    c.pending,
+                    c.state[0],
+                    c.state[1],
+                    c.modal,
+                    c.idle,
+                    c.ready,
+                    u8::from(fresh_cards),
+                    c.status,
+                    c.ports[0],
+                    c.ports[1],
+                    read::<u32>(base() + 0x53050f0)
+                ));
+            }
         }
         let seen = policy::Frame {
             epoch: e,

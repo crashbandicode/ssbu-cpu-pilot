@@ -189,6 +189,52 @@ meter off, `p1=cpu level=9 auto_rematch=on`; the Yoga answered by hand.
   `epoch=begin` line still showed match 1's pop-up record; it did not cause a
   press (the step acts only on a pop-up parsed in its own epoch).
 
+### Online auto save replay (s02 fail, s03 and s04 pass), 2026-11-01
+
+Online pair as r02 (Surface `:78`: this plugin's diag build + detector `95e7def9…` +
+tile cursor `b8313ca2…`, profile `c-s`; Yoga `:77`: detector + tile cursor, no plugin,
+profile `c-y`), rating runtime, Quickplay Solo, Sephiroth on both, 1 stock, Omega,
+items and FS meter off. Branch `online-save`. Timelines:
+`python3 -I tools/results_timeline.py runs/<label>/surface/outputs/sdmc/ultimate/ssbu-cpu-pilot/events.log`.
+
+- **s02, diag `eb34d9a2…` (`be1838f` + cards lines), fail.** P1 the player,
+  Auto save on, Auto rematch off: `epoch=begin`, then `flow=timeout step=Cards` at
+  +21.02 s and no `cards=sample` line, so the cards hook never ran. Frames: winner
+  splash with a countdown (14 → 0), then "Rematch?" (first seen at about +22.6 s),
+  then the character select, with no cards screen and no press. Replays 5 → 5. The second match never
+  matched (the Surface sat on the character select after the repick), so the run
+  was aborted and released. Detector: `sync_end … desync_seen=0` on both.
+- **s03 and s04, diag `4a44ebf4…` (online splash A), pass.** One character-select
+  start, then the rematch:
+  - Match 1, P1 CPU, both rows on, Yoga Yes. `save=press_a_splash n=1..6` on port 0
+    from +1.9 s, then `cards=sample n=1 route=1 offered=1 … phase=2 pending=2 …
+    ready=1 … ports=-1,0` at +7.2 s (s03) / +7.1 s (s04). Then `press_y`,
+    `select_yes`, `confirm`, `writing`, `close_success` and `save=completed …
+    status=5` at +8.31 / +8.21 s, then `rematch=press_a` at +22.21 / +22.10 s and
+    `rematch=accepted` 0.02 s later. The rematch played on both consoles.
+  - Match 2 (the rematch), P1 the player with keepalive input, Auto rematch off,
+    Yoga No: the same splash and save tokens, `save=completed … status=5` at
+    +7.96 / +8.05 s, no rematch line, and no third session within 60 s.
+  - Every epoch: `save=ok` from the timeline script. New replays on the Surface:
+    s03 `replay202611185320.bin` (34,944 B) and `replay202611185420.bin`
+    (30,224 B); s04 `replay20261119145.bin` (33,504 B) and
+    `replay20261119250.bin` (33,464 B). Each run's count went 5 → 6 → 7; the
+    copies are in `runs/<label>/surface/save-after/`. In s03 the Surface keepalive
+    did not stop at its `sync_end` (a run-script error) and kept tapping through
+    match 2's results. s04 reran both matches with that fixed: `{"steps": 35,
+    "errors": 0, "reason": "stop"}`.
+  - Frames (s03, `burst/*-s-1.png`): after the A, the online result cards
+    ("Gold Earned 60", a 15 s countdown), "Save a replay of this battle?" with Yes
+    selected, then the cards with the GSP change, and "Rematch?" when the cards'
+    countdown ended.
+  - Detectors: s03 `sync_end trigger=normal kind=1 frame=1514 … desync_seen=0`
+    and `frame=1339 … desync_seen=0`; s04 `frame=1475` and `frame=1497`, all on
+    both consoles at the same frame.
+
+All three runs: claim and release in the coordination file; both profiles
+restored (8/8 checks); 0 panic/abort/crash and 0 `2306-` in both `console.log`s;
+`run.json` and `memory.peak` kept.
+
 ### Training Modpack branch using this library (k01, k02)
 
 Fork branch `cpu-pilot-lib` at `c840b20` (`ssbu-cpu-pilot-core` rev `0162eed`,
