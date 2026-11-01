@@ -5,18 +5,19 @@ game's own CPU and back, at any time: step away mid-match, or let a CPU play
 your side while you test a mod. It can also answer the online "Rematch?"
 pop-up and save replays for you, offline and online.
 
-![Online Deluxe's CPU Pilot page: P1 switched from Player to CPU, then the CPU fights on its own](docs/media/cpu-pilot-page.gif)
+![Online Deluxe's CPU Pilot page: P1 switched from Player to CPU (L5), L+R+X steps it to L6 and L7, then the CPU fights on its own](docs/media/cpu-pilot-page.gif)
 
 *Eden, 2026-11-01, Training: L+R+Down to the CPU Pilot page, ZR+Right sets P1
-to CPU (tag `CPU Lv9`), the window closes and the CPU fights with the
-controller idle. Online Deluxe 0.10.0, ssbu-cpu-pilot 0.2.0 code, 10 fps.*
+to `CPU (L5)`, L+R+X twice steps it to `CPU (L7)` (HUD tag `CPU Lv7`), Window
+Options, then the window closes and the CPU fights with the controller idle.
+Online Deluxe 0.10.1, ssbu-cpu-pilot 0.2.1, 10 fps.*
 
 ## Use
 
 Press **L+R+Down** until Online Deluxe shows the **CPU Pilot** page, then
 **ZR+Right/Left** on a row:
 
-![The CPU Pilot page: P1 CPU (L4), Auto rematch Off, Auto save replay Off](docs/media/cpu-pilot-page-crop.png)
+![The CPU Pilot page: P1 CPU (L6), Auto rematch Off, Auto save replay Off](docs/media/cpu-pilot-page-crop.png)
 
 | Row | |
 | --- | --- |

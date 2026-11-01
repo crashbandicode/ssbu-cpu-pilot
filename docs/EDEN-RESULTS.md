@@ -351,4 +351,32 @@ page). Surface :78 for w01, the Ally (as above) for the rest. Evidence in
   5.6%). `eden_log.txt` 5,464 lines, no panic/abort/crash event (the one match
   is the setting name).
 
+### 0.2.1: the P1 row's level and L+R+X (m04, m05)
+
+2026-11-01, the Ally, Online Deluxe 0.10.1 `a8dcda24…` (L+R+X on a plugin row
+requests its current choice; the label column fits), the card's 16 NROs with
+both builds in place, the tile cursor, and the card's Deluxe INI. Evidence in
+`/home/intpa/ssbu-cpu-pilot/eden/runs/{m04,m05}/`.
+
+- **m04, pass (diag `c3d2e0bc…`, `502b6e2`), in Training with the window
+  open:** ZR+Right showed `CPU (L3)` (`arm level=3`), and two L+R+X presses
+  showed `CPU (L4)` and `CPU (L5)` with exactly two pad steps logged
+  (`combo level=4`, `combo level=5`): Deluxe's request for the same press did
+  not step it again. Window Options showed `Stages + Counterpick` whole. One
+  ZR+Left: `Player` (`release restored=true`); ZR+Right again armed at level 5.
+  The game's Training menu (Plus) did not stop battle input mapping (no
+  `stale` line), so the next L+R+X stepped through the pad (`combo level=6`,
+  `config.ini` `level=6`).
+- **m05, pass (release `e3033426…`, `502b6e2`):** on the main menu after boot,
+  with no battle running (P1's pad path cannot act there), the page went
+  `Player` → ZR+Right `CPU (L3)` → L+R+X `CPU (L4)` → L+R+X `CPU (L5)` →
+  ZR+Left `Player`, and `config.ini` kept `level=5`: one step per press through
+  Deluxe's request alone. Then in Training (README GIF): ZR+Right `CPU (L5)`,
+  L+R+X `CPU (L6)` and `CPU (L7)` with the HUD tag following (`CPU Lv5` →
+  `CPU Lv7`), Window Options, and P1 fought alone (Steve 0 → 10%). Right after
+  a level change the game briefly shows P1's own name tag: the level is applied
+  by handing P1 back and arming again, as in 0.1.0.
+- Both: `eden_log.txt` 5,800 and 5,657 lines, no panic/abort/crash event (the
+  one match is the setting name); run folders deleted, RELEASED.
+
 **Not yet run in Eden:** a replay A/B with the detector.
