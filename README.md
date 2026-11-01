@@ -52,10 +52,12 @@ leave it off while this plugin drives P1.
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --no-default-features
-pwsh -File tools/build.ps1 -Kind release   # -> dist/release
+pwsh -File tools/build.ps1 -Kind release   # cargo skyline build --release -> dist/release
 pwsh -File tools/build.ps1 -Kind diag      # Eden build -> dist/diag
 ```
 
-MIT, see [LICENSE](LICENSE). Developed with AI assistance (Claude, Codex and
-other coding agents) under the operator's direction and review; nothing is
-claimed beyond the dated tests.
+License: MIT, see [LICENSE](LICENSE).
+
+> **Disclaimer:** this project was developed with the assistance of AI
+> (Claude, Codex and other coding agents) under the operator's direction and
+> review. Nothing is claimed beyond the dated tests cited above.
