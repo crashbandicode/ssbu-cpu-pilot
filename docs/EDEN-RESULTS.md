@@ -316,4 +316,39 @@ the Vulkan surface on that host).
   sha256 `70f7bb4d…894f`; a 960-wide take of the same schedule was 8.03 MB but
   the menu text was too small to read.
 
+### 0.2.0: the CPU Pilot page with Online Deluxe 0.10.0 (w01, p01, m02, m03)
+
+2026-11-01, Online Deluxe 0.10.0 `a070b1a7…` (one Window Options row per plugin
+page). Surface :78 for w01, the Ally (as above) for the rest. Evidence in
+`/home/intpa/ssbu-cpu-pilot/eden/runs/{w01,p01,m02,m03}/`.
+
+- **w01, pass (release `0830f3fc…`, `17f7033`):** the card set with both new
+  builds. The card's Deluxe INI (`hide_pages=plugins,own_pages,performance`)
+  showed one Hidden row per page: `Stages + Counterpick` (the card's
+  elite_stages_counterpick, id `stages_counterpick`) and `CPU Pilot`. CPU Pilot
+  → Shown: Deluxe wrote `hide_pages=plugins,performance` and
+  `hide_plugin_pages=stages_counterpick`; the cycle became Settings → CPU Pilot
+  → Window Options. ZR+Right: tag `CPU Lv3`, Ness 10.0 → 138.4% with the host
+  idle; ZR+Left: the player again.
+- **p01, pass (diag `6e381a59…`, `17f7033`, and a test plugin with two
+  pages):** each page shown and hidden on its own, hidden pages skipped by the
+  cycle, Up/Down wrapping through the rows, the setting kept after a restart.
+  Mid-match, P1 handed over and back from the page (`arm level=3 … slot=0`,
+  `release restored=true`). Auto save with P1 the player ran through
+  `save=completed step=Close status=5` and a new replay file. With P1 set to CPU
+  the host drove the menus (tile cursor `step screen=css`); no `arm` outside
+  battle.
+- **m02, the README media (release `49efcc06…`, `be1838f`):** see
+  [media/README.md](media/README.md).
+- **m03, pass (release `e996e923…`, the 0.2.0 code):** the card's 16 NROs as
+  installed at 13:57Z (Deluxe 0.10.0) with this build in place of 0.1.0, the
+  tile cursor, and the card's Deluxe INI with the two lines above. Install
+  `plugin=ssbu-cpu-pilot/0.2.0 … result=installed heap_allocations=0
+  menu=registered`, Deluxe `build=0.10.0-89e9b473db22-1793530551`. In Training:
+  Settings → CPU Pilot (`P1 Player`); ZR+Right: `P1 CPU`, tag `CPU Lv9`;
+  Window Options listed `CPU Pilot Shown` and `Stages + Count…` Hidden (the
+  long label is clipped by the row's label column); P1 fought alone (Ness 0 →
+  5.6%). `eden_log.txt` 5,464 lines, no panic/abort/crash event (the one match
+  is the setting name).
+
 **Not yet run in Eden:** a replay A/B with the detector.
