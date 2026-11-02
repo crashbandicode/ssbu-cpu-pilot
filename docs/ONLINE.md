@@ -26,8 +26,9 @@ exactly two loaded human controllers and exactly one observed FIM slot.
 armed. Since 0.2.2 the waiting practice (melee `0x0d`, any mode) and a
 local-wireless battle (melee `0x01`, mode `0x02010000`; local Smash on one
 console is melee `0x00`) are never offline: the pilot stays off there. Only
-`0x0e`/`0x07010101` has run in Eden; the rest of this online path has run
-only in Eden.
+`0x0e`/`0x07010101` has run in Eden. On the Switch the operator reported 0.2.2
+working in an Elite Smash match (2026-11-02, log not read back); a regular
+Quickplay battle has not run on a Switch.
 Controller slots are resolved to entries, never assumed to equal entry IDs.
 Native controller back-links, scripts, operation flags and slot mirrors are
 validated. Secondary AI (`ctrl+0x60`, `ai+0x980`) is refused.

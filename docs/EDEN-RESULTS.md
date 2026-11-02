@@ -415,7 +415,7 @@ Online Deluxe 0.10.1 `a8dcda24…` and the Training Modpack `f22f192b…`.
 - P1 → CPU mid-battle did nothing (no freeze or crash); `config.ini` kept a
   stepped level (`level=1`). The scene values (the Training Modpack's lines,
   Deluxe's stage-load records): Elite Smash, mode `0x07010400`, waiting
-  practice at melee `0x0d`, five battles at melee `0x10`. 0.2.1 admitted only
+  practice at melee `0x0d`, six battles at melee `0x10`. 0.2.1 admitted only
   Eden's Quickplay battle (melee `0x0e`, mode `0x07010101`), so it never armed.
   0.2.2 admits Quickplay and Elite battles at either melee, and keeps
   local-wireless battles out of the offline path ([ONLINE.md](ONLINE.md)).
@@ -439,4 +439,7 @@ in `/home/intpa/ssbu-cpu-pilot/eden/runs/{h01,h02,h03}/`.
 - **The card:** release v0.2.2 (`ed8f308f…`, a clean build of the tag
   identical to h02's) replaced 0.2.1 at 13:27Z over DBI with the playbook's
   `upgrade2-mtp.py` (`installed_verified`, rollback copy on the card); read
-  back separately: pilot `ed8f308f…`, Deluxe `a8dcda24…`. Not yet run there.
+  back separately: pilot `ed8f308f…`, Deluxe `a8dcda24…`.
+- **On the Switch, later that day:** the operator reported that P1 → CPU
+  worked in an Elite Smash match with this build. Its event log has not been
+  read back; a regular (non-Elite) Quickplay match has not run on the Switch.
