@@ -436,3 +436,7 @@ in `/home/intpa/ssbu-cpu-pilot/eden/runs/{h01,h02,h03}/`.
   ZR+Left: the player's own tag back.
 - All three: `eden_log.txt` 5,399–5,497 lines, no `Unmapped` line, no
   panic/abort/crash event (the one match is the setting name).
+- **The card:** release v0.2.2 (`ed8f308f…`, a clean build of the tag
+  identical to h02's) replaced 0.2.1 at 13:27Z over DBI with the playbook's
+  `upgrade2-mtp.py` (`installed_verified`, rollback copy on the card); read
+  back separately: pilot `ed8f308f…`, Deluxe `a8dcda24…`. Not yet run there.
