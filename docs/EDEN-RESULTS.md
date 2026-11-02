@@ -419,3 +419,20 @@ Online Deluxe 0.10.1 `a8dcda24…` and the Training Modpack `f22f192b…`.
   Eden's Quickplay battle (melee `0x0e`, mode `0x07010101`), so it never armed.
   0.2.2 admits Quickplay and Elite battles at either melee, and keeps
   local-wireless battles out of the offline path ([ONLINE.md](ONLINE.md)).
+
+### 0.2.2 in Eden (h01–h03), 2026-11-02
+
+The Ally, the card's 16 plugins as read that day (Training Modpack
+`f22f192b…`, Deluxe 0.10.1, the card's Deluxe and pilot `config.ini`: level 1)
+with this plugin in place of 0.2.1, plus the tile cursor; Training. Evidence
+in `/home/intpa/ssbu-cpu-pilot/eden/runs/{h01,h02,h03}/`.
+
+- **h01 (diag `a9e44e87…`, `dc8c727`) and h03 (diag `bf030ea4…`,
+  `2f8e915`), pass:** ZR+Right on the page: `gate ready armed=0`, `arm level=1
+  rank=0 old_rank=100 slot=0`; ZR+Left: `release restored=true old_rank=100`.
+- **h02 (release `ed8f308f…`, `2f8e915`), pass:** `plugin=ssbu-cpu-pilot/0.2.2
+  … result=installed heap_allocations=0 menu=registered`; ZR+Right: HUD tag
+  `CPU Lv1`, P1 fought with the controller idle (Piranha Plant 0 → 40.2%);
+  ZR+Left: the player's own tag back.
+- All three: `eden_log.txt` 5,399–5,497 lines, no `Unmapped` line, no
+  panic/abort/crash event (the one match is the setting name).
