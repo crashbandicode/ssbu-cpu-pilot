@@ -7,14 +7,26 @@ pub enum Scope {
     Unsupported,
 }
 
-/// Only the fork's audited online battle scope; never its waiting practice,
-/// other online modes, or an uninitialized game-mode singleton.
+/// Quickplay's battle as Eden runs it (LAN): melee `0x0e`, mode `0x07010101`.
+pub const EDEN_QUICKPLAY: (u8, u32) = (0x0e, 0x0701_0101);
+/// Quickplay's battle on a Switch: melee `0x10`, mode `0x07010400` (read on a
+/// console on 2026-11-02; its waiting practice is melee `0x0d` in the same
+/// mode). The game may set the mode's top bit, which is ignored.
+pub const CONSOLE_QUICKPLAY: (u8, u32) = (0x10, 0x0701_0400);
+
+/// The audited online battle scope only (Quickplay's battle, on the console
+/// or in Eden); never its waiting practice, other online modes, or an
+/// uninitialized game-mode singleton. Any `0x07xxxxxx` mode, with or without
+/// its top bit, is online and never offline.
 pub const fn scope(initialized: bool, melee: u8, mode: u32) -> Scope {
+    let mode = mode & 0x7fff_ffff;
     if !initialized {
         Scope::Unsupported
-    } else if melee == 0x0e && mode == 0x07010101 {
+    } else if (melee == EDEN_QUICKPLAY.0 && mode == EDEN_QUICKPLAY.1)
+        || (melee == CONSOLE_QUICKPLAY.0 && mode == CONSOLE_QUICKPLAY.1)
+    {
         Scope::Online1v1
-    } else if melee == 0x0e || mode >> 24 == 7 {
+    } else if melee == EDEN_QUICKPLAY.0 || mode >> 24 == 7 {
         Scope::Unsupported
     } else {
         Scope::Offline
@@ -97,6 +109,30 @@ mod tests {
         assert_eq!(scope(true, 0x0e, 0x07010102), Scope::Unsupported);
         assert_eq!(scope(true, 0x0c, 0x07010101), Scope::Unsupported);
         assert_eq!(scope(true, 0x0c, 0x01010101), Scope::Offline);
+    }
+
+    #[test]
+    fn console_quickplay_battle_is_online_but_its_waiting_practice_is_not() {
+        // The Switch's Quickplay, 2026-11-02: waiting practice melee 0x0d,
+        // then the battle at melee 0x10, both in mode 0x07010400.
+        assert_eq!(scope(true, 0x10, 0x07010400), Scope::Online1v1);
+        assert_eq!(scope(true, 0x10, 0x87010400), Scope::Online1v1);
+        assert_eq!(scope(false, 0x10, 0x07010400), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x07010400), Scope::Unsupported);
+        assert_eq!(scope(true, 0x00, 0x07010400), Scope::Unsupported);
+        assert_eq!(scope(true, 0x10, 0x07010100), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0e, 0x07010400), Scope::Unsupported);
+        assert_eq!(scope(true, 0x10, 0x07010101), Scope::Unsupported);
+    }
+
+    #[test]
+    fn an_online_mode_with_its_top_bit_set_is_never_offline() {
+        for mode in [0x87010101, 0x87010400, 0x87020000] {
+            for melee in [0x00, 0x0c, 0x0d, 0x0e, 0x10, 0x20] {
+                assert_ne!(scope(true, melee, mode), Scope::Offline, "melee {melee:#x} mode {mode:#x}");
+            }
+        }
+        assert_eq!(scope(true, 0x0d, 0x82010000), Scope::Offline);
     }
 
     #[test]

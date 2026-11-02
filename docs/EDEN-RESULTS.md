@@ -401,3 +401,20 @@ both builds in place, the tile cursor, and the card's Deluxe INI. Evidence in
   one match is the setting name); run folders deleted, RELEASED.
 
 **Not yet run in Eden:** a replay A/B with the detector.
+
+## On a Switch (2026-11-02)
+
+The card, read over DBI after the operator's play session (Quickplay on
+Nintendo's servers): 16 plugins, among them this plugin 0.2.1 `e3033426…`,
+Online Deluxe 0.10.1 `a8dcda24…` and the Training Modpack `f22f192b…`.
+
+- Every boot: `plugin=ssbu-cpu-pilot/0.2.1 … fim_valid=stock/near
+  fim_exit=stock/near hud=stock/near … result=installed heap_allocations=0
+  menu=registered menu_allocations=58`. The Training Modpack:
+  `[CpuPilot] standalone_pilot_present …; fork pilot hooks not installed`.
+- P1 → CPU mid-battle did nothing (no freeze or crash); `config.ini` kept a
+  stepped level (`level=1`). The Training Modpack's scene lines show the
+  console's Quickplay: mode `0x07010400`, waiting practice at melee `0x0d`,
+  the battle at melee `0x10`. 0.2.1 admitted only Eden's battle (melee `0x0e`,
+  mode `0x07010101`), so it never armed. 0.2.2 also admits the console's
+  battle ([ONLINE.md](ONLINE.md)).

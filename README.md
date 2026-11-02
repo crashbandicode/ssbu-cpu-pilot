@@ -45,7 +45,7 @@ leave it off while this plugin drives P1.
 - Rematch and replay automation: [docs/RESULTS.md](docs/RESULTS.md)
 - The `ssbu-cpu-pilot-core` library, for plugins such as the Training Modpack: [docs/LIBRARY.md](docs/LIBRARY.md)
 - [smash-gamepad-overlay](https://git.syntaxbyexample.com/intpa/smash-gamepad-overlay) 0.3.0 shows the CPU's inputs on P1's own layout
-- Test evidence (Eden; not yet run on a Switch): [docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md)
+- Test evidence (Eden, and a Switch session on 2026-11-02): [docs/EDEN-RESULTS.md](docs/EDEN-RESULTS.md)
 
 ## Build
 
