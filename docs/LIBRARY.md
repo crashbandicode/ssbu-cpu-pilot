@@ -28,7 +28,7 @@ version. Pin a `rev`: the API is versioned by commit until a release.
 | `session` | yes | `Session::step(Frame) -> Action` (`Arm`, `Rearm`, `Think`, `Release`, `None`) |
 | `hud` | yes | the "CPU Lv<n>" label in UTF-16 and ASCII |
 | `results` | yes | the per-results-screen policy for auto save replay and auto rematch: steps, frame deadlines, one-port press sequences, no retry after a late signal |
-| `online` | yes | exact online scope (Quickplay's battle: `CONSOLE_QUICKPLAY` melee `0x10` / mode `0x07010400` since 0.1.2, `EDEN_QUICKPLAY` melee `0x0e` / mode `0x07010101`), single local controller-slot election, two-entry binding and bounded stage-initialization lease |
+| `online` | yes | exact online scope (a Quickplay or Elite battle: `QUICKPLAY_MODE` / `ELITE_MODE` with an `ONLINE_BATTLE_MELEE`, since 0.1.2; the waiting practice and `LOCAL_WIRELESS_BATTLE` are never offline), single local controller-slot election, two-entry binding and bounded stage-initialization lease |
 | `native` | Switch only | `controller`, `resolve`, `ready`, `arm`, `think`, `release`, `rank_table`, `scope`, `single_human`, `stage_state`, `stage_begin` / `stage_end`, `stream_copy` (13.0.5 offsets) |
 
 ## The host's part

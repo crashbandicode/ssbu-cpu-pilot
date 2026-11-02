@@ -7,26 +7,38 @@ pub enum Scope {
     Unsupported,
 }
 
-/// Quickplay's battle as Eden runs it (LAN): melee `0x0e`, mode `0x07010101`.
-pub const EDEN_QUICKPLAY: (u8, u32) = (0x0e, 0x0701_0101);
-/// Quickplay's battle on a Switch: melee `0x10`, mode `0x07010400` (read on a
-/// console on 2026-11-02; its waiting practice is melee `0x0d` in the same
-/// mode). The game may set the mode's top bit, which is ignored.
-pub const CONSOLE_QUICKPLAY: (u8, u32) = (0x10, 0x0701_0400);
+/// Quickplay's mode word (`0x53050f0`).
+pub const QUICKPLAY_MODE: u32 = 0x0701_0101;
+/// Elite Smash: the game promotes the Quickplay mode word to this value.
+pub const ELITE_MODE: u32 = 0x0701_0400;
+/// The melee byte (`0x52c51b0`) of a Quickplay or Elite battle: `0x0e` in
+/// Eden's Quickplay battles, `0x10` in Elite battles on a Switch
+/// (2026-11-02). Either is admitted in either mode.
+pub const ONLINE_BATTLE_MELEE: [u8; 2] = [0x0e, 0x10];
+/// The waiting practice before a Quickplay or local-wireless match (the
+/// shared PracticeScene setup), in any mode.
+pub const WAITING_PRACTICE_MELEE: u8 = 0x0d;
+/// A local-wireless (LDN) battle: the Training Modpack's 13.0.5 trace. Local
+/// Smash on one console is melee `0x00` in the same mode (Eden p01).
+pub const LOCAL_WIRELESS_BATTLE: (u8, u32) = (0x01, 0x0201_0000);
 
-/// The audited online battle scope only (Quickplay's battle, on the console
-/// or in Eden); never its waiting practice, other online modes, or an
-/// uninitialized game-mode singleton. Any `0x07xxxxxx` mode, with or without
-/// its top bit, is online and never offline.
+/// The audited online battle scope only (a Quickplay or Elite battle); never
+/// a waiting practice, a local-wireless battle (other consoles share it, and
+/// it has no online isolation), other online modes, or an uninitialized
+/// game-mode singleton. The mode's top bit is ignored: any `0x07xxxxxx` mode
+/// is online and never offline.
 pub const fn scope(initialized: bool, melee: u8, mode: u32) -> Scope {
     let mode = mode & 0x7fff_ffff;
+    let battle = melee == ONLINE_BATTLE_MELEE[0] || melee == ONLINE_BATTLE_MELEE[1];
     if !initialized {
         Scope::Unsupported
-    } else if (melee == EDEN_QUICKPLAY.0 && mode == EDEN_QUICKPLAY.1)
-        || (melee == CONSOLE_QUICKPLAY.0 && mode == CONSOLE_QUICKPLAY.1)
-    {
+    } else if battle && (mode == QUICKPLAY_MODE || mode == ELITE_MODE) {
         Scope::Online1v1
-    } else if melee == EDEN_QUICKPLAY.0 || mode >> 24 == 7 {
+    } else if melee == ONLINE_BATTLE_MELEE[0]
+        || melee == WAITING_PRACTICE_MELEE
+        || (melee == LOCAL_WIRELESS_BATTLE.0 && mode == LOCAL_WIRELESS_BATTLE.1)
+        || mode >> 24 == 7
+    {
         Scope::Unsupported
     } else {
         Scope::Offline
@@ -112,27 +124,41 @@ mod tests {
     }
 
     #[test]
-    fn console_quickplay_battle_is_online_but_its_waiting_practice_is_not() {
-        // The Switch's Quickplay, 2026-11-02: waiting practice melee 0x0d,
+    fn elite_and_quickplay_battles_are_online_but_their_waiting_practice_is_not() {
+        // A Switch in Elite Smash, 2026-11-02: waiting practice melee 0x0d,
         // then the battle at melee 0x10, both in mode 0x07010400.
         assert_eq!(scope(true, 0x10, 0x07010400), Scope::Online1v1);
         assert_eq!(scope(true, 0x10, 0x87010400), Scope::Online1v1);
         assert_eq!(scope(false, 0x10, 0x07010400), Scope::Unsupported);
         assert_eq!(scope(true, 0x0d, 0x07010400), Scope::Unsupported);
         assert_eq!(scope(true, 0x00, 0x07010400), Scope::Unsupported);
+        // Either battle melee in either mode is the same Quickplay battle.
+        assert_eq!(scope(true, 0x0e, 0x07010400), Scope::Online1v1);
+        assert_eq!(scope(true, 0x10, 0x07010101), Scope::Online1v1);
+        // Other Quickplay/online mode words are not.
         assert_eq!(scope(true, 0x10, 0x07010100), Scope::Unsupported);
-        assert_eq!(scope(true, 0x0e, 0x07010400), Scope::Unsupported);
-        assert_eq!(scope(true, 0x10, 0x07010101), Scope::Unsupported);
+        assert_eq!(scope(true, 0x10, 0x07020000), Scope::Unsupported);
+    }
+
+    #[test]
+    fn local_wireless_battles_and_waiting_practice_are_never_offline() {
+        // Local wireless (LDN): waiting practice melee 0x0d, battle melee 0x01,
+        // both in mode 0x02010000; local Smash on one console is melee 0x00.
+        assert_eq!(scope(true, 0x01, 0x02010000), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x02010000), Scope::Unsupported);
+        assert_eq!(scope(true, 0x00, 0x02010000), Scope::Offline);
+        // Training (melee 0x20, mode 0x04040000) stays offline.
+        assert_eq!(scope(true, 0x20, 0x04040000), Scope::Offline);
     }
 
     #[test]
     fn an_online_mode_with_its_top_bit_set_is_never_offline() {
         for mode in [0x87010101, 0x87010400, 0x87020000] {
-            for melee in [0x00, 0x0c, 0x0d, 0x0e, 0x10, 0x20] {
+            for melee in [0x00, 0x01, 0x0c, 0x0d, 0x0e, 0x10, 0x20] {
                 assert_ne!(scope(true, melee, mode), Scope::Offline, "melee {melee:#x} mode {mode:#x}");
             }
         }
-        assert_eq!(scope(true, 0x0d, 0x82010000), Scope::Offline);
+        assert_eq!(scope(true, 0x00, 0x82010000), Scope::Offline);
     }
 
     #[test]

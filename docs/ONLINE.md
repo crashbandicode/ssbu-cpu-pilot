@@ -17,13 +17,17 @@ d1/phase and supplies d0 to analysis (`0x30e694..0x30e6b4`); native completion
 writes phase 2 at `0x3119cc`. A deep private-copy strategy A has not been
 proved feasible or impossible.
 
-Admission requires initialized game mode and Quickplay's battle: melee
-`0x10`, mode `0x07010400` on a Switch (read on a console 2026-11-02; admitted
-from 0.2.2), or melee `0x0e`, mode `0x07010101` in Eden; the mode's top bit is
-ignored, and the waiting practice (melee `0x0d`) is never admitted. Then
+Admission requires initialized game mode and a Quickplay battle: mode
+`0x07010101` (Quickplay) or `0x07010400` (Elite Smash, which the game promotes
+the Quickplay mode to), with the battle melee `0x0e` (Eden's Quickplay) or
+`0x10` (Elite on a Switch, 2026-11-02); the mode's top bit is ignored. Then
 exactly two loaded human controllers and exactly one observed FIM slot.
-0.2.1 admitted only Eden's tuple, so on a Switch it never armed online. The
-rest of this online path has run only in Eden.
+0.2.1 admitted only `0x0e`/`0x07010101`, so in Elite on a Switch it never
+armed. Since 0.2.2 the waiting practice (melee `0x0d`, any mode) and a
+local-wireless battle (melee `0x01`, mode `0x02010000`; local Smash on one
+console is melee `0x00`) are never offline: the pilot stays off there. Only
+`0x0e`/`0x07010101` has run in Eden; the rest of this online path has run
+only in Eden.
 Controller slots are resolved to entries, never assumed to equal entry IDs.
 Native controller back-links, scripts, operation flags and slot mirrors are
 validated. Secondary AI (`ctrl+0x60`, `ai+0x980`) is refused.
