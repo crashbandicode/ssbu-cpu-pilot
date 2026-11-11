@@ -28,7 +28,7 @@ version. Pin a `rev`: the API is versioned by commit until a release.
 | `session` | yes | `Session::step(Frame) -> Action` (`Arm`, `Rearm`, `Think`, `Release`, `None`) |
 | `hud` | yes | the "CPU Lv<n>" label in UTF-16 and ASCII |
 | `results` | yes | the per-results-screen policy for auto save replay and auto rematch: steps, frame deadlines, one-port press sequences, no retry after a late signal |
-| `online` | yes | exact online scope (a Quickplay or Elite battle: `QUICKPLAY_MODE` / `ELITE_MODE` with an `ONLINE_BATTLE_MELEE`, since 0.1.2; the waiting practice and `LOCAL_WIRELESS_BATTLE` are never offline), single local controller-slot election, two-entry binding and bounded stage-initialization lease |
+| `online` | yes | exact online scope (a Quickplay or Elite battle: `QUICKPLAY_MODE` / `ELITE_MODE` with an `ONLINE_BATTLE_MELEE`, since 0.1.2; their waiting practice is `Scope::WaitingPractice` since 0.1.3; the local-wireless waiting practice and `LOCAL_WIRELESS_BATTLE` are never offline), `route` (since 0.1.3: what a slot's final input mapping does per scope; the waiting practice routes like Training), `same_scene` (since 0.1.3: an armed pilot keeps its objects only in the scope it armed in), single local controller-slot election, two-entry binding and bounded stage-initialization lease |
 | `native` | Switch only | `controller`, `resolve`, `ready`, `arm`, `think`, `release`, `rank_table`, `scope`, `single_human`, `stage_state`, `stage_begin` / `stage_end`, `stream_copy` (13.0.5 offsets) |
 
 ## The host's part

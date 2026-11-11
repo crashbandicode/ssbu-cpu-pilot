@@ -29,6 +29,15 @@ console is melee `0x00`) are never offline: the pilot stays off there. Only
 `0x0e`/`0x07010101` has run in Eden. On the Switch the operator reported 0.2.2
 working in an Elite Smash match (2026-11-02, log not read back); a regular
 Quickplay battle has not run on a Switch.
+
+Since 0.2.3 the waiting practice of Quickplay and Elite Smash (melee `0x0d` in
+`0x07010101` or `0x07010400`) is its own scope, `WaitingPractice`. It is a
+local practice while matchmaking runs, and the pilot drives P1 there exactly
+as in Training (`online::route`: FighterEntry 0 on slot 0, no lease). The
+local-wireless waiting practice stays off. An armed pilot keeps its objects
+only in the scope it armed in (`online::same_scene`): when a match is found,
+the first battle frame releases the practice's session without touching its
+objects, and the battle admits and arms as above.
 Controller slots are resolved to entries, never assumed to equal entry IDs.
 Native controller back-links, scripts, operation flags and slot mirrors are
 validated. Secondary AI (`ctrl+0x60`, `ai+0x980`) is refused.

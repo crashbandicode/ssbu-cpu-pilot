@@ -443,3 +443,46 @@ in `/home/intpa/ssbu-cpu-pilot/eden/runs/{h01,h02,h03}/`.
 - **On the Switch, later that day:** the operator reported that P1 → CPU
   worked in an Elite Smash match with this build. Its event log has not been
   read back; a regular (non-Elite) Quickplay match has not run on the Switch.
+
+## 0.2.3: the Quickplay waiting-room practice (pp1, pp2), 2026-11-11
+
+Branch `patch/lobby-practice-drive`, code `a725c27`: diag `7117e649…`, release
+`98849884…`. Eden-GIF `d9594758b629-…-svc-x8-x17` (`7d5de744…`), 0.5x, LAN
+online with TLS off. Instance b: this build, TrainingRooms (diag), Online
+Deluxe 0.10.4 (`70a2931e…`, the card's NRO; its INI shows the CPU Pilot page),
+`libnro_hook`, `libparam_hook`, the desync detector and the tile cursor;
+instance a (pp1 only): the detector and the tile cursor. b waits alone in
+Quickplay's waiting area; the pad sends nothing while the pilot drives.
+Runner receipts and logs: `smash-training-lobby/artifacts/phase23/pilot-patch/eden/<label>/`
+(operator-local). The lines below come from
+
+```text
+python3 -I tools/lobby_report.py <b pilot events.log> <b detector events.log> <a detector events.log>
+python3 -I tools/test_lobby_report.py
+```
+
+- **pp1 (the Yoga, a pair; TrainingRooms `d3eeac81`), 16/16 rows pass:**
+  - In the practice: `scene scope=WaitingPractice slot=0`; the CPU Pilot
+    page (L+R+Down three times, ZR+Right) sets `p1=cpu`; `arm level=3
+    rank=21 old_rank=100 slot=0`. P1 then fought on its own (the partner
+    went from 12.0 % to 46.5 % and was KO'd); `p1_inputs` stayed at 58.3–62.5
+    calls/s with 6 of 14 samples non-zero. The practice shows no HUD tag.
+  - TrainingRooms' Record chord while it drives: `record_refused` and "P1 is
+    controlled by an AI: recording is off"; no capture started.
+  - TrainingRooms' lobby speeds x1, 1/2, 1/4 and back: the pilot's entry
+    (`0x1751ce8`) ran 1.00–1.06 times per vsync on slot 0 only, with no
+    release.
+  - A match found while it drives (a readied): on the first battle frame
+    `scene scope=Online1v1 slot=0`, `handover from=WaitingPractice
+    to=Online1v1`, `release restored=false old_rank=100`; then `online
+    stage_start slot=0 stage=347 phase=1`, `online stage=Ready phase=2
+    rng_restored=1 d0_restored=1` and `arm level=3 … slot=0` 8.1 s later, tag
+    `CPU Lv3`. The pilot drove to the match's normal end (58.5–62.3 calls/s,
+    7 of 12 samples non-zero, no release). Detectors: `sync_end trigger=normal kind=1 frame=7521 local=0
+    desync_seen=0` on b and `… frame=7521 local=1 desync_seen=0` on a.
+  - Back in the practice after the match: `scene scope=WaitingPractice
+    slot=0`, `arm level=3 … slot=0`. The page back to `Player`: `release
+    restored=true old_rank=100`, then Record captured (`recording=1`, then
+    `recording=0`).
+  - Both consoles: `trace.unmapped_access` total 0, and no panic, abort,
+    crash or Unmapped in `console.log`.

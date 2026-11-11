@@ -5,5 +5,6 @@
 /eden/shots
 /eden/captures
 /dist/
-/eden/
+/eden/*
+!/eden/lobby-0.2.3/
 __pycache__/

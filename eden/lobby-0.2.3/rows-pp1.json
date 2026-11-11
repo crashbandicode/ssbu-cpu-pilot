@@ -1,0 +1,649 @@
+{
+ "game_id": "01006A800016E000",
+ "start": "frontend-ready",
+ "gates": {
+  "loaded": {
+   "library": "loaded"
+  },
+  "installed": {
+   "kind": "log",
+   "source": "detector_log",
+   "whole_file": true,
+   "cap": 120,
+   "pattern": "plugin=ssbu-desync-detector/\\S+ [^\\n]*heap_allocations=0"
+  },
+  "main": {
+   "kind": "image",
+   "reference": "refs/main.png",
+   "sha256": "902628cebd8620847be44e41a826046740f495ca0dfa7e78d8482c43c0da1bdc",
+   "roi": [
+    150,
+    265,
+    450,
+    335
+   ],
+   "tolerance": 8,
+   "cap": 30,
+   "reference_is_roi": true
+  },
+  "online-menu": {
+   "kind": "image",
+   "reference": "refs/online-menu.png",
+   "sha256": "2f4d98fd992d0bf622806cd7d3bd1442754940dd5d4296ce41dfee089bf3bcc9",
+   "roi": [
+    40,
+    5,
+    300,
+    45
+   ],
+   "cap": 40
+  },
+  "quickplay-menu": {
+   "kind": "image",
+   "reference": "refs/quickplay-menu.png",
+   "sha256": "4bf9d8236d2630faa734950587817c432e478e0b2d2b6396f2de6b7015ff070f",
+   "roi": [
+    40,
+    5,
+    300,
+    45
+   ],
+   "cap": 40
+  },
+  "css-tile": {
+   "kind": "log",
+   "source": "tile_log",
+   "pattern": "settled screen=css at=(\\d+) hovered=\\1\\b",
+   "cap": 40
+  },
+  "ready-banner": {
+   "kind": "image",
+   "reference": "refs/ready-banner.png",
+   "sha256": "a70e14b154caa901a65a3d2f0dcac1d852a9635372103097dd67791b256900be",
+   "roi": [
+    200,
+    110,
+    600,
+    240
+   ],
+   "cap": 30
+  },
+  "ready-banner-any": {
+   "kind": "image",
+   "reference": "refs/ready-banner.png",
+   "sha256": "a70e14b154caa901a65a3d2f0dcac1d852a9635372103097dd67791b256900be",
+   "roi": [
+    200,
+    110,
+    600,
+    240
+   ],
+   "tolerance": 40,
+   "cap": 30
+  },
+  "practice-up": {
+   "kind": "log",
+   "source": "tr_log",
+   "whole_file": true,
+   "cap": 30,
+   "pattern": "\\[LobbyPractice\\] active=true"
+  }
+ },
+ "about": "R15 (tr-opus-pilot-patch, 2026-11-11): ssbu-cpu-pilot 0.2.3 diag (a725c27, 7117e649) drives P1 in Quickplay's waiting-room practice on b beside TrainingRooms d3eeac81 diag (9f8afc66) and Online Deluxe 0.10.4 (the card's 70a2931e); a vanilla. Arm on the CPU Pilot page in the practice, the pilot drives, TR's Record refused, the lobby speeds x1/1/2/1/4 with the pilot's entry per vsync, a match found while it drives (the handover, the battle arms through Online1v1, desync_seen=0 on both), back in the practice it re-arms; then Player again and Record works.",
+ "scope": "TASK-pilot-lobby-patch.md item 4 (TASK-rc8.md R15); integration 14:43Z: the Yoga, untimed single + pair.",
+ "on_failure": "stop",
+ "recover": [
+  {
+   "run": "steps.py:noop",
+   "args": {
+    "why": "the practice stays up between the R15 rows"
+   }
+  }
+ ],
+ "setup": [
+  {
+   "state": "two Eden frontends up, games not loaded (defer_load)",
+   "via": "fixture",
+   "ref": "pair config: a detector + tile cursor; b TR d3eeac81 diag, nro_hook, param_hook, Deluxe 0.10.4, pilot 0.2.3 diag, detector, tile cursor; QCF trace points on both"
+  },
+  {
+   "state": "both at the Quickplay menu",
+   "via": "segment",
+   "ref": "segments to-online, to-quickplay after hook steps.py:to_main"
+  },
+  {
+   "state": "b searching alone in the waiting area",
+   "via": "hook",
+   "ref": "steps.py:reach_css_tile + pick + steps.py:ready_and_wait_searching"
+  },
+  {
+   "state": "b: TrainingRooms' settings, cycle_preload and button_config; Deluxe's INI with the CPU Pilot page shown",
+   "via": "fixture",
+   "ref": "config instance b files: TrainingRooms/settings.json, cycle_preload.ini, button_config.ini, ssbu_online_deluxe_rewrite/config.ini"
+  },
+  {
+   "state": "the pilot set to CPU in the practice",
+   "via": "segment",
+   "ref": "segments pilot-page-step, pilot-arm (lr14t-shared) via pp.py:arm_in_practice"
+  },
+  {
+   "state": "b's lobby speed",
+   "via": "segment",
+   "ref": "segments speed-left1, speed-right1 (QCF rows-r2b)"
+  }
+ ],
+ "segments": {
+  "to-online": {
+   "file": "segments/to-online.edenmacro.json",
+   "sha256": "d52590537267a9aa817e3d7e8969fde0d70e38ca93cf36a5ca616ba8d4678858",
+   "cap": 60
+  },
+  "to-quickplay": {
+   "file": "segments/to-quickplay.edenmacro.json",
+   "sha256": "4db24aee967ca0721918af0291deb53cbefdc07ce4485cf8d423401a5bc63acc",
+   "cap": 40
+  },
+  "pick": {
+   "file": "segments/pick.edenmacro.json",
+   "sha256": "aa7177b16f3c04163c79e3faac2cc3f5ba6ea52ab569c5a0d2d6c5e5acf7ca02",
+   "cap": 20
+  },
+  "tile-up": {
+   "file": "segments/tile-up.edenmacro.json",
+   "sha256": "281878f3b0c24b0a8703890518e1579cdc5aa1946320754da05605fbebe954eb",
+   "cap": 20
+  },
+  "to-css": {
+   "file": "segments/to-css.edenmacro.json",
+   "sha256": "df589d123449a453b70525e393591b2a95249bc8d55470402985236df774a4d5",
+   "cap": 60
+  },
+  "speed-left1": {
+   "file": "segments/speed-left1.edenmacro.json",
+   "sha256": "2f50aa0293d96c23cf4388ed0b805e72a0ce526d5242ff1c3eab108c20031792",
+   "cap": 20
+  },
+  "speed-left3": {
+   "file": "segments/speed-left3.edenmacro.json",
+   "sha256": "b4959e57ba4809ebfdb12667d1112dedbeb53519e56ca3091f5496ccb08a7caa",
+   "cap": 20
+  },
+  "speed-right1": {
+   "file": "segments/speed-right1.edenmacro.json",
+   "sha256": "296ed174a477649e703afc1b601a67048bbb7a1fff053d2fcd0879c73eee564a",
+   "cap": 20
+  },
+  "pilot-page-step": {
+   "file": "segments/pilot-page-step.edenmacro.json",
+   "sha256": "db109fa89164d216cf7516057f28626012db5f7015ee870691e47c194074c2ac",
+   "cap": 20
+  },
+  "pilot-arm": {
+   "file": "segments/pilot-arm.edenmacro.json",
+   "sha256": "bd024e051944683b3ef4b73fc0da3821d03c3627d441eed05e0477531961e728",
+   "cap": 20
+  },
+  "pilot-release": {
+   "file": "segments/pilot-release.edenmacro.json",
+   "sha256": "48793ebf9713be0db63f2dfa3575e4ce0e84e68fa6e0c923c50a1b1c08780b92",
+   "cap": 20
+  },
+  "chord-record": {
+   "file": "segments/chord-record.edenmacro.json",
+   "sha256": "f2fa1848d9988aea562b142421767175b60a3b836770c3f537b7473e9dd18e04",
+   "cap": 20
+  }
+ },
+ "rows": [
+  {
+   "id": "q00-load",
+   "start": "frontend-ready",
+   "end": "loaded",
+   "budget_min": 4,
+   "steps": [
+    {
+     "call": "game.load",
+     "on": "a",
+     "params": {
+      "path": "@game"
+     },
+     "job_cap": 180
+    },
+    {
+     "call": "game.load",
+     "on": "b",
+     "params": {
+      "path": "@game"
+     },
+     "job_cap": 180
+    },
+    {
+     "gate": "loaded",
+     "on": "a"
+    },
+    {
+     "gate": "loaded",
+     "on": "b"
+    },
+    {
+     "gate": "installed",
+     "on": "a"
+    },
+    {
+     "gate": "installed",
+     "on": "b"
+    },
+    {
+     "reason": "other plugins finish booting",
+     "wait_ms": 15000
+    },
+    {
+     "shot": "boot",
+     "on": "a"
+    },
+    {
+     "shot": "boot",
+     "on": "b"
+    }
+   ]
+  },
+  {
+   "id": "q01-main",
+   "start": "loaded",
+   "end": "main",
+   "budget_min": 4,
+   "steps": [
+    {
+     "run": "steps.py:to_main",
+     "on": "a",
+     "check": true
+    },
+    {
+     "run": "steps.py:to_main",
+     "on": "b",
+     "check": true
+    },
+    {
+     "gate": "main",
+     "on": "a"
+    },
+    {
+     "gate": "main",
+     "on": "b"
+    }
+   ]
+  },
+  {
+   "id": "q02-online",
+   "start": "main",
+   "end": "online-menu",
+   "budget_min": 3,
+   "steps": [
+    {
+     "on": "a",
+     "gate": "main"
+    },
+    {
+     "on": "a",
+     "play": "to-online"
+    },
+    {
+     "on": "a",
+     "gate": "online-menu"
+    },
+    {
+     "on": "b",
+     "gate": "main"
+    },
+    {
+     "on": "b",
+     "play": "to-online"
+    },
+    {
+     "on": "b",
+     "gate": "online-menu"
+    }
+   ]
+  },
+  {
+   "id": "q03-quickplay",
+   "start": "online-menu",
+   "end": "quickplay-menu",
+   "budget_min": 3,
+   "steps": [
+    {
+     "on": "a",
+     "gate": "online-menu"
+    },
+    {
+     "on": "a",
+     "play": "to-quickplay"
+    },
+    {
+     "on": "a",
+     "gate": "quickplay-menu"
+    },
+    {
+     "on": "b",
+     "gate": "online-menu"
+    },
+    {
+     "on": "b",
+     "play": "to-quickplay"
+    },
+    {
+     "on": "b",
+     "gate": "quickplay-menu"
+    }
+   ]
+  },
+  {
+   "id": "r01-b-waits",
+   "start": "quickplay-menu",
+   "end": "b-searching",
+   "budget_min": 4,
+   "steps": [
+    {
+     "run": "steps.py:reach_css_tile",
+     "on": "b",
+     "check": true
+    },
+    {
+     "gate": "css-tile",
+     "on": "b"
+    },
+    {
+     "play": "pick",
+     "on": "b"
+    },
+    {
+     "gate": "ready-banner",
+     "on": "b"
+    },
+    {
+     "run": "steps.py:ready_and_wait_searching",
+     "on": "b",
+     "check": true,
+     "args": {
+      "tag": "w1"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pp1-installs",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 1,
+   "steps": [
+    {
+     "run": "pp.py:installs",
+     "on": "b",
+     "check": true
+    }
+   ],
+   "on_failure": "continue",
+   "on": "b",
+   "start_gate": "practice-up"
+  },
+  {
+   "id": "pp2-practice",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 2,
+   "steps": [
+    {
+     "run": "pp.py:practice_ready",
+     "on": "b",
+     "check": true
+    }
+   ],
+   "on": "b",
+   "start_gate": "practice-up"
+  },
+  {
+   "id": "pp3-arm",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 3,
+   "steps": [
+    {
+     "run": "pp.py:arm_in_practice",
+     "on": "b",
+     "check": true,
+     "args": {
+      "presses": 3,
+      "close": 2
+     }
+    }
+   ],
+   "on": "b",
+   "start_gate": "practice-up"
+  },
+  {
+   "id": "pp4-drives",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 2,
+   "steps": [
+    {
+     "run": "pp.py:drives",
+     "on": "b",
+     "check": true
+    }
+   ],
+   "on_failure": "continue",
+   "on": "b",
+   "start_gate": "practice-up"
+  },
+  {
+   "id": "pp5-record-refused",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 2,
+   "steps": [
+    {
+     "run": "pp.py:record_refused",
+     "on": "b",
+     "check": true
+    }
+   ],
+   "on_failure": "continue",
+   "on": "b",
+   "start_gate": "practice-up"
+  },
+  {
+   "id": "pp6-speeds",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 4,
+   "steps": [
+    {
+     "run": "pp.py:speeds",
+     "on": "b",
+     "check": true
+    }
+   ],
+   "on_failure": "continue",
+   "on": "b",
+   "start_gate": "practice-up"
+  },
+  {
+   "id": "pp7-match",
+   "start": "b-searching",
+   "end": "css",
+   "budget_min": 10,
+   "on": "b",
+   "start_gate": "practice-up",
+   "steps": [
+    {
+     "run": "pp.py:mark",
+     "on": "b",
+     "check": true,
+     "args": {
+      "key": "match"
+     }
+    },
+    {
+     "run": "steps.py:reach_css_tile",
+     "on": "a",
+     "check": true
+    },
+    {
+     "gate": "css-tile",
+     "on": "a"
+    },
+    {
+     "play": "pick",
+     "on": "a"
+    },
+    {
+     "gate": "ready-banner",
+     "on": "a"
+    },
+    {
+     "run": "steps.py:ready_until_searching",
+     "on": "a",
+     "check": true,
+     "args": {
+      "tag": "m1r"
+     }
+    },
+    {
+     "run": "pp.py:handover",
+     "on": "b",
+     "check": true,
+     "args": {
+      "key": "match"
+     }
+    },
+    {
+     "run": "r14bc.py:match_window",
+     "on": "b",
+     "check": true,
+     "args": {
+      "tag": "m1"
+     }
+    },
+    {
+     "run": "spd.py:play_and_decline",
+     "on": "a",
+     "check": true,
+     "args": {
+      "tag": "m1"
+     }
+    },
+    {
+     "run": "pp.py:match_end",
+     "on": "b",
+     "check": true,
+     "args": {
+      "key": "match"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pp8-back",
+   "start": "css",
+   "end": "b-searching",
+   "budget_min": 6,
+   "steps": [
+    {
+     "run": "spd.py:wait_css",
+     "on": "b",
+     "check": true
+    },
+    {
+     "run": "pp.py:mark",
+     "on": "b",
+     "check": true,
+     "args": {
+      "key": "back"
+     }
+    },
+    {
+     "run": "steps.py:ready_and_wait_searching",
+     "on": "b",
+     "check": true,
+     "args": {
+      "tag": "w2"
+     }
+    },
+    {
+     "run": "pp.py:practice_ready",
+     "on": "b",
+     "check": true
+    },
+    {
+     "run": "pp.py:rearmed",
+     "on": "b",
+     "check": true,
+     "args": {
+      "key": "back"
+     }
+    },
+    {
+     "run": "pp.py:drives",
+     "on": "b",
+     "check": true,
+     "args": {
+      "tag": "pp-drive-back"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pp9-disarm-records",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 3,
+   "steps": [
+    {
+     "run": "pp.py:disarm_records",
+     "on": "b",
+     "check": true,
+     "args": {
+      "presses": 3,
+      "close": 2
+     }
+    }
+   ],
+   "on_failure": "continue",
+   "on": "b",
+   "start_gate": "practice-up"
+  },
+  {
+   "id": "z-a",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 1,
+   "steps": [
+    {
+     "run": "steps.py:z_instance",
+     "on": "a",
+     "check": true
+    }
+   ],
+   "on": "a",
+   "start_gate": "installed",
+   "on_failure": "continue"
+  },
+  {
+   "id": "z-b",
+   "start": "b-searching",
+   "end": "b-searching",
+   "budget_min": 1,
+   "steps": [
+    {
+     "run": "steps.py:z_instance",
+     "on": "b",
+     "check": true
+    }
+   ],
+   "on": "b",
+   "start_gate": "installed",
+   "on_failure": "continue"
+  }
+ ]
+}
