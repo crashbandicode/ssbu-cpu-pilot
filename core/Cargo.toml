@@ -1,6 +1,6 @@
 [package]
 name = "ssbu-cpu-pilot-core"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 publish = false
 description = "P1-as-CPU core for Super Smash Bros. Ultimate 13.0.5 plugins: settings, level cycling, pad encoding and the pilot session; no Skyline dependency"

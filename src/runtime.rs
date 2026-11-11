@@ -2,9 +2,10 @@
 //! input mapping (`0x1750dd0`), the P1 pilot, the HUD mark, the Deluxe rows,
 //! the exports and the install line.
 //!
-//! Offline: P1 in battles with a native CPU. Online: the sole locally mapped
-//! human slot in the audited 1v1 scope. Analysis uses an isolated AI RNG lease;
-//! decisions replace mapped input before the normal pack/send path.
+//! Offline and in Quickplay's waiting practice: P1 in battles with a native
+//! CPU. Online: the sole locally mapped human slot in the audited 1v1 scope.
+//! Analysis uses an isolated AI RNG lease; decisions replace mapped input
+//! before the normal pack/send path.
 use crate::chain::{self, hook::Outcome, Entry};
 use crate::model::{self, buttons, Kind, Line, Site, TagSlot, TagWrite};
 use core::cell::UnsafeCell;
@@ -14,6 +15,7 @@ use skyline::nn;
 use ssbu_cpu_pilot_core::combo::{self, Combo};
 use ssbu_cpu_pilot_core::hud;
 use ssbu_cpu_pilot_core::native::{self, Native, Stream};
+use ssbu_cpu_pilot_core::online::{self as scopes, Route, Scope};
 use ssbu_cpu_pilot_core::pad::{self, MappedInputs};
 use ssbu_cpu_pilot_core::session::{Action, Frame, Session};
 use ssbu_cpu_pilot_core::settings::{self, Settings, SharedSettings};
@@ -100,6 +102,8 @@ struct Pilot {
     session: Session,
     combo: Combo,
     armed: Option<Native>,
+    /// The scope `armed` was armed in (`scopes::same_scene`).
+    armed_scope: Scope,
     old_rank: i32,
     stream: Stream,
     /// The 13.0.5 level ladder, checked at boot.
@@ -110,6 +114,7 @@ static PILOT: Owned<Pilot> = Owned(UnsafeCell::new(Pilot {
     session: Session::new(),
     combo: Combo::new(),
     armed: None,
+    armed_scope: Scope::Unsupported,
     old_rank: 0,
     stream: [0; 20],
     ranks: [0; 9],
@@ -160,14 +165,17 @@ struct Seen {
     in_battle: bool,
     can_think: bool,
     gate: &'static str,
+    scope: Scope,
 }
 
-unsafe fn observe() -> Seen {
+/// P1 as in Training (`Route::LocalP1`): FighterEntry 0 on controller slot 0.
+unsafe fn observe(scope: Scope) -> Seen {
     let none = |gate| Seen {
         native: None,
         in_battle: false,
         can_think: false,
         gate,
+        scope,
     };
     let Some(manager) = manager() else {
         return none("no_manager");
@@ -194,11 +202,12 @@ unsafe fn observe() -> Seen {
         in_battle: true,
         can_think: ready_go && ready.is_ok(),
         gate: if !ready_go { "not_ready_go" } else { ready.err().unwrap_or("ready") },
+        scope,
     }
 }
 
 /// One P1 frame: the L+R+X combo, then the session's action.
-unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8) {
+unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8, scope: Scope) {
     let p = &mut *PILOT.0.get();
     // L+R+X steps the level whenever P1 is set to CPU (0.2.1; before, only
     // once the CPU was driving), with or without Deluxe's window open.
@@ -212,16 +221,18 @@ unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8) {
         diag_event(format_args!("combo level={}", now.level));
     }
     let wanted = SETTINGS.load();
-    let seen = online_runtime::observe(slot);
+    let seen = online_runtime::observe(slot, scope);
     if STALE.swap(false, Ordering::AcqRel) {
         // The battle the session was armed in ended (see `watch_battle_end`):
         // release on the objects only if they are still the armed ones, and
         // start this battle's session afresh.
-        release(p, seen.native);
+        release(p, &seen);
         p.session = Session::new();
     }
+    // The armed objects only in the scope they were armed in: a found match
+    // tears the waiting practice down, and its battle arms afresh.
     let same = match (p.armed, seen.native) {
-        (Some(a), Some(n)) => a.ctrl == n.ctrl && a.ai == n.ai,
+        (Some(a), Some(n)) => a.ctrl == n.ctrl && a.ai == n.ai && scopes::same_scene(p.armed_scope, seen.scope),
         (Some(_), None) => false,
         (None, _) => true,
     };
@@ -235,13 +246,13 @@ unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8) {
     let think = match action {
         Action::None => false,
         Action::Release => {
-            release(p, seen.native);
+            release(p, &seen);
             false
         }
-        Action::Arm(level) => arm(p, seen.native, level),
+        Action::Arm(level) => arm(p, &seen, level),
         Action::Rearm(level) => {
-            release(p, seen.native);
-            arm(p, seen.native, level)
+            release(p, &seen);
+            arm(p, &seen, level)
         }
         Action::Think => true,
     };
@@ -257,13 +268,14 @@ unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8) {
     ARMED_LEVEL.store(level, Ordering::Release);
 }
 
-unsafe fn arm(p: &mut Pilot, seen: Option<Native>, level: u8) -> bool {
-    let Some(n) = seen else {
+unsafe fn arm(p: &mut Pilot, seen: &Seen, level: u8) -> bool {
+    let Some(n) = seen.native else {
         return false;
     };
     let rank = p.ranks[usize::from(settings::clamp_level(level) - 1)];
     let (old, stream) = native::arm(base(), n, rank);
     p.armed = Some(n);
+    p.armed_scope = seen.scope;
     p.old_rank = old;
     p.stream = stream;
     ARMED_SLOT.store(n.slot, Ordering::Release);
@@ -272,13 +284,19 @@ unsafe fn arm(p: &mut Pilot, seen: Option<Native>, level: u8) -> bool {
     true
 }
 
-unsafe fn release(p: &mut Pilot, seen: Option<Native>) {
+unsafe fn release(p: &mut Pilot, seen: &Seen) {
     ARMED_LEVEL.store(0, Ordering::Release);
     let Some(armed) = p.armed.take() else {
         return;
     };
-    // Restore only on the same live objects; after a scene change they are gone.
-    let restored = seen.is_some_and(|n| n == armed);
+    // Restore only on the same live objects in the scope they were armed in;
+    // after a scene change they are gone (the waiting practice when a match
+    // is found).
+    let scene = scopes::same_scene(p.armed_scope, seen.scope);
+    if !scene {
+        diag_event(format_args!("handover from={:?} to={:?}", p.armed_scope, seen.scope));
+    }
+    let restored = scene && seen.native.is_some_and(|n| n == armed);
     if restored {
         native::release(base(), armed, p.old_rank);
     }
@@ -303,7 +321,8 @@ unsafe extern "C" fn fim_exit(ctx: &mut InlineCtx) {
     if slot >= 8 || out == 0 || out % 4 != 0 {
         return;
     }
-    if native::scope(base()) == ssbu_cpu_pilot_core::online::Scope::Offline && slot != 0 {
+    let scope = native::scope(base());
+    if scopes::route(scope, slot as u8) == Route::Skip {
         return;
     }
     let controller = if marker == 2 { ctx.registers[20].x() as usize } else { 0 };
@@ -314,7 +333,7 @@ unsafe extern "C" fn fim_exit(ctx: &mut InlineCtx) {
     };
     diag_count();
     LAST_PILOT_TICK.store(tick(), Ordering::Release);
-    pilot_frame(out as *mut MappedInputs, raw, slot as u8);
+    pilot_frame(out as *mut MappedInputs, raw, slot as u8, scope);
 }
 
 /// Final input mapping runs only in battle, so the pilot never sees the

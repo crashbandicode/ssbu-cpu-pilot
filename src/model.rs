@@ -688,6 +688,12 @@ mod tests {
     }
 
     #[test]
+    fn version_is_the_patch() {
+        // 0.2.3: the waiting practice; a patch on the released 0.2.2.
+        assert_eq!(VERSION, "0.2.3");
+    }
+
+    #[test]
     fn combo_needs_all_three() {
         assert!(buttons::combo_held(buttons::COMBO | 1));
         assert!(!buttons::combo_held(buttons::L | buttons::R));

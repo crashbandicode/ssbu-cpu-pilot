@@ -1,7 +1,7 @@
 //! Online binding and the scene-wide native analysis lease. All state below
 //! belongs to the game thread, just like PILOT. No fighter input is written here.
 use super::*;
-use ssbu_cpu_pilot_core::online::{self, Scope, Stage};
+use ssbu_cpu_pilot_core::online::{self, Route, Scope, Stage};
 
 struct Lease {
     manager: usize,
@@ -51,24 +51,26 @@ unsafe fn pair(manager: usize, mask: u8) -> Result<Native, &'static str> {
     Ok(n)
 }
 
-pub(super) unsafe fn observe(slot: u8) -> Seen {
-    let none = |gate| Seen { native: None, in_battle: false, can_think: false, gate };
-    let scope = native::scope(base());
+pub(super) unsafe fn observe(slot: u8, scope: Scope) -> Seen {
+    let none = |gate| Seen { native: None, in_battle: false, can_think: false, gate, scope };
     let current = manager().filter(|&m| !call_bool(&IS_RESULT_MODE, m));
     let scene = current.map(|m| (scope, m));
     if *SCENE.0.get() != scene {
         *SCENE.0.get() = scene;
         *MASK.0.get() = 0;
         *LEASE.0.get() = None;
+        if scene.is_some() {
+            diag_event(format_args!("scene scope={scope:?} slot={slot}"));
+        }
     }
     let Some(manager) = current else {
         return none("online_no_battle");
     };
-    if scope == Scope::Offline {
-        return super::observe();
-    }
-    if scope != Scope::Online1v1 {
-        return none("unsupported_scope");
+    match online::route(scope, slot) {
+        // Training, local battles and the waiting practice.
+        Route::LocalP1 => return super::observe(scope),
+        Route::Online => {}
+        Route::Skip | Route::Off => return none("unsupported_scope"),
     }
     *MASK.0.get() |= 1 << slot;
     let n = match pair(manager, *MASK.0.get()) {
@@ -102,6 +104,7 @@ pub(super) unsafe fn observe(slot: u8) -> Seen {
         in_battle: true,
         can_think: ready_go && ready.is_ok(),
         gate: if !ready_go { "not_ready_go" } else { ready.err().unwrap_or("online_ready") },
+        scope,
     }
 }
 

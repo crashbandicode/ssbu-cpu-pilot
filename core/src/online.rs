@@ -3,8 +3,48 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Offline,
+    /// The practice in Quickplay's (and Elite Smash's) waiting room while
+    /// matchmaking runs. P1 is driven there as in Training (`route`); the
+    /// battle a found match starts is `Online1v1`.
+    WaitingPractice,
     Online1v1,
     Unsupported,
+}
+
+/// What the final-input-mapping hook does with one controller slot's mapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// Not P1's mapping in a scope where only P1 is driven: left alone.
+    Skip,
+    /// P1 (FighterEntry 0 on controller slot 0) and its native AI, as in Training.
+    LocalP1,
+    /// The online battle: local slot election, then the analysis lease.
+    Online,
+    /// The pilot never drives here (it still releases an armed session).
+    Off,
+}
+
+pub const fn route(scope: Scope, slot: u8) -> Route {
+    match scope {
+        Scope::Offline | Scope::WaitingPractice => {
+            if slot == 0 {
+                Route::LocalP1
+            } else {
+                Route::Skip
+            }
+        }
+        Scope::Online1v1 => Route::Online,
+        Scope::Unsupported => Route::Off,
+    }
+}
+
+/// An armed pilot belongs to the scope it armed in: it keeps driving, or
+/// restores the rank of, the objects it armed only while the scope is the
+/// same. When a match is found the waiting practice is torn down and the
+/// battle (`Online1v1`) arms afresh on its own objects; the practice's are
+/// never touched again, whatever their addresses.
+pub const fn same_scene(armed_in: Scope, now: Scope) -> bool {
+    armed_in as u8 == now as u8
 }
 
 /// Quickplay's mode word (`0x53050f0`).
@@ -16,24 +56,29 @@ pub const ELITE_MODE: u32 = 0x0701_0400;
 /// (2026-11-02). Either is admitted in either mode.
 pub const ONLINE_BATTLE_MELEE: [u8; 2] = [0x0e, 0x10];
 /// The waiting practice before a Quickplay or local-wireless match (the
-/// shared PracticeScene setup), in any mode.
+/// shared PracticeScene setup), in any mode. Only Quickplay's and Elite's
+/// are `Scope::WaitingPractice`.
 pub const WAITING_PRACTICE_MELEE: u8 = 0x0d;
 /// A local-wireless (LDN) battle: the Training Modpack's 13.0.5 trace. Local
 /// Smash on one console is melee `0x00` in the same mode (Eden p01).
 pub const LOCAL_WIRELESS_BATTLE: (u8, u32) = (0x01, 0x0201_0000);
 
-/// The audited online battle scope only (a Quickplay or Elite battle); never
-/// a waiting practice, a local-wireless battle (other consoles share it, and
-/// it has no online isolation), other online modes, or an uninitialized
-/// game-mode singleton. The mode's top bit is ignored: any `0x07xxxxxx` mode
-/// is online and never offline.
+/// The audited online battle scope (a Quickplay or Elite battle) and the
+/// waiting practice of those modes (since 0.2.3); never a local-wireless
+/// battle or waiting practice (other consoles share it, and it has no online
+/// isolation), other online modes, or an uninitialized game-mode singleton.
+/// The mode's top bit is ignored: any `0x07xxxxxx` mode is online and never
+/// offline.
 pub const fn scope(initialized: bool, melee: u8, mode: u32) -> Scope {
     let mode = mode & 0x7fff_ffff;
     let battle = melee == ONLINE_BATTLE_MELEE[0] || melee == ONLINE_BATTLE_MELEE[1];
+    let quickplay = mode == QUICKPLAY_MODE || mode == ELITE_MODE;
     if !initialized {
         Scope::Unsupported
-    } else if battle && (mode == QUICKPLAY_MODE || mode == ELITE_MODE) {
+    } else if battle && quickplay {
         Scope::Online1v1
+    } else if melee == WAITING_PRACTICE_MELEE && quickplay {
+        Scope::WaitingPractice
     } else if melee == ONLINE_BATTLE_MELEE[0]
         || melee == WAITING_PRACTICE_MELEE
         || (melee == LOCAL_WIRELESS_BATTLE.0 && mode == LOCAL_WIRELESS_BATTLE.1)
@@ -113,6 +158,7 @@ impl Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::{Action, Frame, Session};
 
     #[test]
     fn scope_excludes_waiting_and_other_online_modes() {
@@ -130,7 +176,8 @@ mod tests {
         assert_eq!(scope(true, 0x10, 0x07010400), Scope::Online1v1);
         assert_eq!(scope(true, 0x10, 0x87010400), Scope::Online1v1);
         assert_eq!(scope(false, 0x10, 0x07010400), Scope::Unsupported);
-        assert_eq!(scope(true, 0x0d, 0x07010400), Scope::Unsupported);
+        // Since 0.2.3 the waiting practice is its own scope, never Online1v1.
+        assert_eq!(scope(true, 0x0d, 0x07010400), Scope::WaitingPractice);
         assert_eq!(scope(true, 0x00, 0x07010400), Scope::Unsupported);
         // Either battle melee in either mode is the same Quickplay battle.
         assert_eq!(scope(true, 0x0e, 0x07010400), Scope::Online1v1);
@@ -159,6 +206,126 @@ mod tests {
             }
         }
         assert_eq!(scope(true, 0x00, 0x82010000), Scope::Offline);
+    }
+
+    const SCOPES: [Scope; 4] = [Scope::Offline, Scope::WaitingPractice, Scope::Online1v1, Scope::Unsupported];
+
+    #[test]
+    fn the_waiting_practice_is_its_own_scope() {
+        // Quickplay's waiting room, and Elite Smash's (the Switch, 2026-11-02).
+        assert_eq!(scope(true, 0x0d, 0x07010101), Scope::WaitingPractice);
+        assert_eq!(scope(true, 0x0d, 0x07010400), Scope::WaitingPractice);
+        assert_eq!(scope(true, 0x0d, 0x87010101), Scope::WaitingPractice);
+        assert_eq!(scope(true, 0x0d, 0x87010400), Scope::WaitingPractice);
+        // Not before the game mode is initialized, not local wireless, not
+        // other online or offline modes.
+        assert_eq!(scope(false, 0x0d, 0x07010101), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x02010000), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x07010100), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x07010102), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x07020000), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x01010101), Scope::Unsupported);
+        assert_eq!(scope(true, 0x0d, 0x04040000), Scope::Unsupported);
+        // The battle a found match starts stays Online1v1.
+        assert_eq!(scope(true, 0x0e, 0x07010101), Scope::Online1v1);
+        assert_eq!(scope(true, 0x10, 0x07010400), Scope::Online1v1);
+    }
+
+    #[test]
+    fn the_waiting_practice_drives_p1_like_training() {
+        // One table: Training (melee 0x20, mode 0x04040000), local Smash and
+        // the two waiting rooms take the same route for every slot.
+        let training = scope(true, 0x20, 0x04040000);
+        let local = scope(true, 0x00, 0x02010000);
+        assert_eq!(training, Scope::Offline);
+        assert_eq!(local, Scope::Offline);
+        for waiting in [scope(true, 0x0d, 0x07010101), scope(true, 0x0d, 0x07010400)] {
+            for slot in 0..=u8::MAX {
+                assert_eq!(route(waiting, slot), route(training, slot), "slot {slot}");
+                assert_eq!(route(waiting, slot), route(local, slot), "slot {slot}");
+            }
+            assert_eq!(route(waiting, 0), Route::LocalP1);
+            for slot in 1..8 {
+                assert_eq!(route(waiting, slot), Route::Skip);
+            }
+        }
+    }
+
+    #[test]
+    fn online_routes_are_unchanged() {
+        for slot in 0..=u8::MAX {
+            assert_eq!(route(Scope::Online1v1, slot), Route::Online);
+            assert_eq!(route(Scope::Unsupported, slot), Route::Off);
+        }
+        // Battles, local wireless and other online modes: as in 0.2.2.
+        for (melee, mode, wanted) in [
+            (0x0e, 0x07010101, Route::Online),
+            (0x10, 0x07010400, Route::Online),
+            (0x0e, 0x87010400, Route::Online),
+            (0x01, 0x02010000, Route::Off),
+            (0x0d, 0x02010000, Route::Off),
+            (0x0e, 0x07010102, Route::Off),
+            (0x0c, 0x07010101, Route::Off),
+            (0x00, 0x07010400, Route::Off),
+        ] {
+            for slot in 0..8 {
+                assert_eq!(route(scope(true, melee, mode), slot), wanted, "melee {melee:#x} mode {mode:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn armed_objects_are_never_touched_in_another_scope() {
+        for armed_in in SCOPES {
+            for now in SCOPES {
+                assert_eq!(same_scene(armed_in, now), armed_in == now, "{armed_in:?} -> {now:?}");
+            }
+        }
+    }
+
+    /// The runtime's frame (`pilot_frame`): identity is the same objects in
+    /// the same scope, and a release restores the rank only on those.
+    fn frame(armed_in: Scope, now: Scope, same_objects: bool, think: bool) -> (Frame, bool) {
+        let same = same_objects && same_scene(armed_in, now);
+        let f = Frame {
+            desired: Some(3),
+            in_battle: true,
+            same_identity: same,
+            can_think: think,
+        };
+        (f, same)
+    }
+
+    #[test]
+    fn the_waiting_practice_hands_over_to_the_battle() {
+        let mut session = Session::new();
+        let practice = scope(true, 0x0d, 0x07010101);
+        let battle = scope(true, 0x0e, 0x07010101);
+        let (f, _) = frame(practice, practice, true, true);
+        assert_eq!(session.step(f), Action::Arm(3));
+        let (f, _) = frame(practice, practice, true, true);
+        assert_eq!(session.step(f), Action::Think);
+        // The first battle frame, even if the battle's objects sit at the
+        // practice's addresses: released, and the old objects not restored.
+        for same_objects in [false, true] {
+            let mut s = session;
+            let (f, restores) = frame(practice, battle, same_objects, false);
+            assert_eq!(s.step(f), Action::Release);
+            assert!(!restores);
+            assert_eq!(s.armed(), None);
+            // The battle then arms afresh once its own path is ready.
+            let (f, _) = frame(battle, battle, true, false);
+            assert_eq!(s.step(f), Action::None);
+            let (f, _) = frame(battle, battle, true, true);
+            assert_eq!(s.step(f), Action::Arm(3));
+        }
+        // Back in the waiting practice after the battle: the same again.
+        let mut s = Session::new();
+        let (f, _) = frame(battle, battle, true, true);
+        assert_eq!(s.step(f), Action::Arm(3));
+        let (f, restores) = frame(battle, practice, true, true);
+        assert_eq!(s.step(f), Action::Release);
+        assert!(!restores);
     }
 
     #[test]
