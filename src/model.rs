@@ -689,8 +689,9 @@ mod tests {
 
     #[test]
     fn version_is_the_patch() {
-        // 0.2.3: the waiting practice; a patch on the released 0.2.2.
-        assert_eq!(VERSION, "0.2.3");
+        // 0.2.4: the pad's L+R+X stands down under Online Deluxe's window;
+        // a patch on 0.2.3.
+        assert_eq!(VERSION, "0.2.4");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "ssbu-cpu-pilot"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 publish = false
 description = "Skyline plugin for Super Smash Bros. Ultimate 13.0.5: the native CPU drives P1's pad on demand, with automatic rematch and replay saving"

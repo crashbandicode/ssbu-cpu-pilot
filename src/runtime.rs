@@ -13,6 +13,7 @@ use core::fmt::Write as _;
 use skyline::hooks::{getRegionAddress, InlineCtx, Region};
 use skyline::nn;
 use ssbu_cpu_pilot_core::combo::{self, Combo};
+use ssbu_cpu_pilot_core::deluxe::{self, DeluxeOverlayStateV1};
 use ssbu_cpu_pilot_core::hud;
 use ssbu_cpu_pilot_core::native::{self, Native, Stream};
 use ssbu_cpu_pilot_core::online::{self as scopes, Route, Scope};
@@ -210,9 +211,14 @@ unsafe fn observe(scope: Scope) -> Seen {
 unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8, scope: Scope) {
     let p = &mut *PILOT.0.get();
     // L+R+X steps the level whenever P1 is set to CPU (0.2.1; before, only
-    // once the CPU was driving), with or without Deluxe's window open.
+    // once the CPU was driving), except while Online Deluxe's window is
+    // visible (0.2.4): the press is the window's then, and on the P1 row
+    // Deluxe asks for the step itself (`menu::Handler::request`). The window
+    // is asked only while the three buttons are held.
     let cpu = SETTINGS.load().pilot;
-    if p.combo.step(buttons::combo_held(raw_buttons), cpu) {
+    let held = buttons::combo_held(raw_buttons);
+    let window = cpu && held && deluxe_window_visible();
+    if p.combo.step(held, deluxe::pad_steps(cpu, window)) {
         let now = SETTINGS.update(|s| Settings {
             level: combo::next_level(s.level),
             ..s
@@ -351,6 +357,51 @@ const BATTLE_TICKS: u64 = STALE_TICKS / 4;
 /// running and `pilot_frame` reads L+R+X from P1's pad itself.
 fn battle_frames_running() -> bool {
     tick().saturating_sub(LAST_PILOT_TICK.load(Ordering::Acquire)) < BATTLE_TICKS
+}
+
+/// Online Deluxe's `ssbu_online_deluxe_overlay_state_v1` (0.10.5+), 0 until
+/// found. Only `find_deluxe_overlay` looks it up, at boot and then on the
+/// worker; hooks only call what it stored.
+static DELUXE_OVERLAY: AtomicUsize = AtomicUsize::new(0);
+/// After a miss, looked up again at most once a second.
+const DELUXE_RETRY_TICKS: u64 = STALE_TICKS;
+static DELUXE_RETRY: Owned<deluxe::Retry> = Owned(UnsafeCell::new(deluxe::Retry::new()));
+
+/// Finds Deluxe's export if it is not found yet and a lookup is due.
+///
+/// # Safety
+/// Only `main` (before the worker starts) and then the worker call this.
+unsafe fn find_deluxe_overlay() -> bool {
+    if DELUXE_OVERLAY.load(Ordering::Acquire) != 0 {
+        return true;
+    }
+    if !(*DELUXE_RETRY.0.get()).due(tick(), DELUXE_RETRY_TICKS) {
+        return false;
+    }
+    let address = lookup(deluxe::SYMBOL);
+    if address == 0 {
+        return false;
+    }
+    DELUXE_OVERLAY.store(address, Ordering::Release);
+    diag_event(format_args!("deluxe_overlay found"));
+    true
+}
+
+/// Deluxe's window is visible, per its export. Without the export (an older
+/// Deluxe, or none) there is no window. Lock-free on Deluxe's side.
+fn deluxe_window_visible() -> bool {
+    let address = DELUXE_OVERLAY.load(Ordering::Acquire);
+    if address == 0 {
+        return false;
+    }
+    // SAFETY: a found address is that export, whose ABI this declares
+    // (`deluxe::SYMBOL`); `state` is a writable `DeluxeOverlayStateV1`.
+    let filled = unsafe {
+        let f: unsafe extern "C" fn(*mut DeluxeOverlayStateV1) -> bool = core::mem::transmute(address);
+        let mut state = DeluxeOverlayStateV1::default();
+        f(&mut state).then_some(state)
+    };
+    deluxe::window_visible(filled)
 }
 
 fn watch_battle_end() {
@@ -633,12 +684,14 @@ mod menu {
             }
             match option {
                 0 if choice < settings::P1_CHOICES.len() => {
-                    // In battle P1's own pad already stepped the level for this
-                    // L+R+X press (`pilot_frame`); Deluxe's request for the
-                    // current choice must not step it again.
-                    let pad = battle_frames_running();
+                    // Deluxe's request for the current choice is its L+R+X.
+                    // P1's pad stands down while Deluxe's window is visible
+                    // (`pilot_frame`), so this is the press's one step; only
+                    // an older Deluxe without the export reads as no window,
+                    // and in battle its press was stepped by the pad already.
+                    let skip = !deluxe::request_steps(battle_frames_running(), deluxe_window_visible());
                     SETTINGS.update(|s| {
-                        if pad && choice == settings::p1_choice(s) {
+                        if skip && choice == settings::p1_choice(s) {
                             s
                         } else {
                             settings::p1_request(s, choice)
@@ -892,8 +945,9 @@ fn diag_count() {
     diag::count();
 }
 
-// The worker thread: saves config.ini after a pad level change and (diag)
-// appends the event lines. Its object and stack are static.
+// The worker thread: saves config.ini after a pad level change, looks up
+// Deluxe's window-state export until found and (diag) appends the event
+// lines. Its object and stack are static.
 const WORKER_STACK: usize = 32 * 1024;
 #[repr(C, align(4096))]
 struct ThreadStack(UnsafeCell<[u8; WORKER_STACK]>);
@@ -916,6 +970,8 @@ extern "C" fn worker_main(_: *mut skyline::libc::c_void) {
             save_settings();
         }
         watch_battle_end();
+        // SAFETY: `main` stopped calling it before starting this thread.
+        unsafe { find_deluxe_overlay() };
         #[cfg(feature = "diag")]
         {
             round = round.wrapping_add(1);
@@ -1024,6 +1080,9 @@ pub fn main() {
             " menu={menu} menu_allocations={}",
             HEAP_ALLOCATIONS.load(Ordering::Relaxed) - before
         );
+        // SAFETY: the worker, the only other caller, is not started yet.
+        let overlay = unsafe { find_deluxe_overlay() };
+        let _ = write!(report, " deluxe_overlay={}", if overlay { "found" } else { "missing" });
         if !start_worker() {
             let _ = write!(report, " worker=not_started");
         }

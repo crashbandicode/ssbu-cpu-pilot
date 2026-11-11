@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "ssbu-cpu-pilot"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "deluxe-plugin-sdk",
  "skyline",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "ssbu-cpu-pilot-core"
-version = "0.1.3"
+version = "0.1.4"
 
 [[package]]
 name = "syn"
