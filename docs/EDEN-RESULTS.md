@@ -486,3 +486,27 @@ python3 -I tools/test_lobby_report.py
     `recording=0`).
   - Both consoles: `trace.unmapped_access` total 0, and no panic, abort,
     crash or Unmapped in `console.log`.
+- **pp2 (the Surface, one instance; TrainingRooms `eca14e4b` with its lobby
+  2/3 and the world-only x1.5 pass), 14/14 rows pass** (four runner calls on
+  the one boot; the earlier misses were the rows' own: a per-vsync measure on
+  a game running at 12–55 fps there, a start gate on TrainingRooms' rotating
+  log, its log lagging the speed step). Per window (6 s), the pilot's entry
+  against the practice's own update (`main+0x151b150`) and P1's mapped input
+  right after the pilot's write (`main+0x1751cf0`, the u64 at x19):
+
+  ```text
+  python3 -I tools/trace_rate.py <b trace.jsonl>
+  python3 -I tools/test_trace_rate.py
+  ```
+
+  - All 32 windows: exactly **1.000 entry per practice update**, slot 0
+    only, at 2/3, 1/2, 1/4, x1 and x1.5 (six x1.5 windows, among them a
+    30 s hold while it drives); the x1.5 pass does not add input mappings.
+  - With the pilot driving, P1's mapped input was active in 30–74 % of the
+    updates of each of the 21 windows that sampled it; in the one window after
+    the page set P1 back to `Player` (pad idle), in 0 of 345.
+  - Arm, Record refused, Player again (`release restored=true`) and Record
+    capturing: as in pp1. A one-second Eden stall there cleared the armed
+    state (`stale no_battle_frames`), and the next practice frame released on
+    the same live objects and armed again (`release restored=true`, `arm …
+    slot=0`). `trace.unmapped_access` 0; no panic, abort, crash or Unmapped.

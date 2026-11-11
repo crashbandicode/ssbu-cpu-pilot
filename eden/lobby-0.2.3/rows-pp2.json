@@ -83,10 +83,10 @@
   },
   "practice-up": {
    "kind": "log",
-   "source": "tr_log",
+   "source": "pilot_log",
    "whole_file": true,
    "cap": 30,
-   "pattern": "\\[LobbyPractice\\] active=true"
+   "pattern": "scene scope=WaitingPractice slot=0"
   }
  },
  "about": "R15 boot 2 (tr-opus-pilot-patch, 2026-11-11): ssbu-cpu-pilot 0.2.3 diag (a725c27, 7117e649) drives P1 in Quickplay's waiting-room practice on one instance (b, searching alone) beside TrainingRooms eca14e4b diag (R2: lobby 2/3 and the world-only x1.5 pass; R7) and Online Deluxe 0.10.4: every lobby speed with the pilot's entry per vsync and the pilot still driving, Record refused, then Player again and Record works.",

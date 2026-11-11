@@ -106,6 +106,75 @@ def _tick_s(line):
     return int(m.group(1)) / 19_200_000 if m else None
 
 
+FIM_EXIT = 'main+0x1751ce8'
+# The waiting class 0x506d4d8's update (FUN_0151b150): once per game update of the practice; the x1.5 pass runs
+# inside it (TR's hook at +0x20) and ticks the scheduler again, not this update or the input mapping.
+WAIT_UPDATE = 'main+0x151b150'
+MAPPED_OUT = 'main+0x1751cf0'
+
+
+def per_update(ctx, tag, seconds=6.0):
+    """The pilot's entry (final input mapping's exit, slot 0) against the practice's own update, over `seconds`:
+    calls per game update, which stays 1 whatever the host's speed (per vsync drops when the game runs slow). Plus
+    Eden's game fps for context."""
+    start = r2._trace_size(ctx)
+    fim = r2._arm(ctx, {'target': FIM_EXIT, 'registers': ['x23'], 'max_hits': 4000})
+    upd = r2._arm(ctx, {'target': WAIT_UPDATE, 'max_hits': 4000})
+    # Two instructions later (`ldp x20, x19` not yet run): x19 is still the mapped-input output, now holding what the
+    # pilot wrote over it at the exit hook. Its 8 bytes per call are P1's input as sent on.
+    mapped = r2._arm(ctx, {'target': MAPPED_OUT, 'registers': ['x23'], 'max_hits': 4000,
+                           'captures': [{'expression': 'x19', 'type': 'u64'}]})
+    time.sleep(seconds)
+    for ident in (fim, upd, mapped):
+        try:
+            ctx.call('trace.disarm', {'id': ident})
+        except Exception:  # noqa: BLE001 (max_hits may have retired it)
+            pass
+    time.sleep(0.3)
+    records = r2._records(ctx, start)
+    slots = {}
+    values = []
+    for r in records:
+        if str(r.get('point_id')) == fim:
+            s = r14bc._slot(r)
+            slots[s] = slots.get(s, 0) + 1
+        elif str(r.get('point_id')) == mapped:
+            # x23 is already restored here; in the practice only slot 0 maps input (fim_by_slot shows it).
+            caps = r.get('captures') or []
+            v = r2._int(caps[0].get('value')) if caps and isinstance(caps[0], dict) else None
+            if v is not None:
+                values.append(v)
+    updates = sum(1 for r in records if str(r.get('point_id')) == upd)
+    try:
+        status = ctx.call('status', {})
+        fps = round(float((status or {}).get('game_fps') or 0), 1)
+    except Exception:  # noqa: BLE001
+        fps = None
+    active = [v for v in values if v & ~0x8000]
+    out = {'tag': tag, 'fim_by_slot': {str(k): v for k, v in slots.items()}, 'updates': updates,
+           'slot0_per_update': round(slots.get(0, 0) / updates, 3) if updates else None, 'game_fps': fps,
+           'mapped_samples': len(values), 'mapped_active': len(active), 'mapped_distinct': len(set(values)),
+           'mapped_examples': ['%#018x' % v for v in sorted(set(active))[:6]]}
+    steps._save(ctx, 'per-update-%s' % tag, out)
+    return out
+
+
+def _releases(lines):
+    """Releases in `lines`: a hitch re-arm (the worker's one-second stale clear, then the release on the same live
+    objects and the arm on the next battle frame) is reported apart; any other release is a stop."""
+    hitches, other = [], []
+    for i, l in enumerate(lines):
+        if not RELEASE.search(l):
+            continue
+        before = lines[i - 1] if i else ''
+        after = lines[i + 1] if i + 1 < len(lines) else ''
+        if 'stale no_battle_frames' in before and 'restored=true' in l and ARM.search(after):
+            hitches.append([before, l, after])
+        else:
+            other.append(l)
+    return hitches, other
+
+
 def installs(ctx):
     """b: the pilot's install line (0.2.3, every site installed, no hook heap, the Deluxe rows registered)."""
     lines = [l for l in _plines(ctx, 0) if 'plugin=ssbu-cpu-pilot/' in l]
@@ -188,7 +257,7 @@ def drives(ctx, seconds=24.0, tag='pp-drive-x1'):
     start = _size(_plog(ctx))
     began = time.monotonic()
     shots = {'t0': str(ctx.shot(tag + '-t0'))}
-    w = r14bc.window(ctx, tag, seconds=6.0)
+    w = per_update(ctx, tag, seconds=6.0)
     while time.monotonic() - began < seconds:
         ctx.check_stop()
         time.sleep(1.0)
@@ -197,22 +266,22 @@ def drives(ctx, seconds=24.0, tag='pp-drive-x1'):
     shots['end'] = str(ctx.shot(tag + '-end'))
     lines = _plines(ctx, start)
     inputs = [P1_INPUTS.search(l) for l in lines if P1_INPUTS.search(l)]
-    released = [l for l in lines if RELEASE.search(l) or 'stale ' in l]
-    slot0 = (w.get('per_slot') or {}).get('0') or {}
-    out = {'p1_inputs': [(m.group(1), m.group(2)) for m in inputs], 'released': released, 'window_slot0': slot0,
-           'window_slots': sorted((w.get('per_slot') or {}).keys()), 'pilot_lines': lines[-12:], 'shots': shots}
+    hitches, released = _releases(lines)
+    out = {'p1_inputs': [(m.group(1), m.group(2)) for m in inputs], 'released': released, 'hitch_rearms': hitches,
+           'per_update': w, 'pilot_lines': lines[-12:], 'shots': shots}
     steps._save(ctx, tag, out)
     problems = []
     if released:
         problems.append('released while driving: %s' % released[:2])
-    if not inputs or all(int(m.group(2), 16) == 0 for m in inputs):
-        problems.append('no non-zero CPU input logged (p1_inputs): %s' % lines[-6:])
-    rate = slot0.get('calls_per_vsync')
-    if rate is None or not 0.8 <= rate <= 1.2:
-        problems.append('slot 0 entry %s per vsync (1 expected)' % rate)
+    if not w.get('mapped_active'):
+        problems.append('no active P1 input in %s mapped samples' % w.get('mapped_samples'))
+    rate = w.get('slot0_per_update')
+    if rate is None or not 0.9 <= rate <= 1.1:
+        problems.append('slot 0 entry %s per practice update (1 expected)' % rate)
     if problems:
         raise RuntimeError('; '.join(problems))
-    return {'p1_inputs': out['p1_inputs'][-3:], 'calls_per_vsync': rate}
+    return {'p1_inputs': out['p1_inputs'][-3:], 'slot0_per_update': rate, 'game_fps': w.get('game_fps'),
+            'hitch_rearms': len(hitches)}
 
 
 def record_refused(ctx):
@@ -232,12 +301,47 @@ def record_refused(ctx):
     steps._save(ctx, 'pp-record-refused', out)
     if not found or started:
         raise RuntimeError('Record not refused while the pilot drives: %s' % lines[-6:])
-    if any(RELEASE.search(l) for l in plines):
+    if _releases(plines)[1]:
         raise RuntimeError('the pilot released during the Record chord: %s' % plines[-4:])
     return {'refused': found[:200]}
 
 
-LOBBY_LINE = r'\[GameSpeed\] lobby '
+LOBBY_LINE = r'\[GameSpeed\] (lobby (Taken|Freed|paced)|step place=Lobby)'
+LOBBY_ORDER = ['1/4', '1/2', '2/3', 'x1', 'x1.5']
+
+
+def lobby_speed(ctx):
+    """The lobby speed TrainingRooms last stepped to (`[GameSpeed] step place=Lobby … speed=<s>`), x1 if none."""
+    steps_ = r2._lines_since(ctx, 0, r'\[GameSpeed\] step place=Lobby .*speed=')
+    m = re.search(r'speed=(\S+)', steps_[-1]) if steps_ else None
+    return m.group(1) if m else 'x1'
+
+
+def await_speed(ctx, label, cap_s=20.0):
+    """TrainingRooms' diag log is written behind the game: wait until its last lobby step names `label`."""
+    end = time.monotonic() + cap_s
+    now = lobby_speed(ctx)
+    while now != label and time.monotonic() < end:
+        ctx.check_stop()
+        time.sleep(0.5)
+        now = lobby_speed(ctx)
+    return now
+
+
+def to_x1(ctx):
+    """Back to x1 from whatever lobby speed the last row left (one speed-left1/right1 per step)."""
+    time.sleep(3.0)
+    now = lobby_speed(ctx)
+    played = []
+    if now in LOBBY_ORDER:
+        i = LOBBY_ORDER.index(now)
+        while i != LOBBY_ORDER.index('x1'):
+            name = 'speed-right1' if i < LOBBY_ORDER.index('x1') else 'speed-left1'
+            i += 1 if name == 'speed-right1' else -1
+            _play(ctx, name)
+            played.append(name)
+            await_speed(ctx, LOBBY_ORDER[i])
+    return {'was': now, 'played': played, 'now': lobby_speed(ctx)}
 
 
 def speeds(ctx, plan=None, tag='pp-speeds'):
@@ -246,42 +350,48 @@ def speeds(ctx, plan=None, tag='pp-speeds'):
     still armed (no release) and `p1_inputs` rising. `plan`: [[label, [segments]], ...] from x1, then back to x1."""
     plan = plan or [['1/2', ['speed-left1']], ['1/4', ['speed-left1']], ['x1', ['speed-right1', 'speed-right1']]]
     start = _size(_plog(ctx))
-    results = [dict(r14bc.window(ctx, tag + '-start'), speed='start')]
+    reset = to_x1(ctx) if plan[0][0] != 'x1' else None
+    results = [dict(per_update(ctx, tag + '-start'), speed='start', reset=reset)]
     for label, segs in plan:
         mark = r2._mark(ctx)
         for name in segs:
             _play(ctx, name)
             time.sleep(1.0)
-        line = r2._wait_line(ctx, mark, LOBBY_LINE, 10)
-        time.sleep(1.5)
-        w = r14bc.window(ctx, '%s-%d-%s' % (tag, len(results), label.replace('/', '-').replace('.', '_')), seconds=6.0)
+        reached = await_speed(ctx, label)
+        line = (r2._lines_since(ctx, mark, LOBBY_LINE) or [None])[-1]
+        time.sleep(1.0)
+        wmark = r2._mark(ctx)
+        w = per_update(ctx, '%s-%d-%s' % (tag, len(results), label.replace('/', '-').replace('.', '_')), seconds=6.0)
         w['speed'] = label
         w['line'] = line
+        w['reached'] = reached
         w['lines'] = [l[:200] for l in r2._lines_since(ctx, mark, LOBBY_LINE)][-6:]
+        w['passes_in_window'] = len(r2._lines_since(ctx, wmark, r'\[GameSpeed\] lobby pass'))
         results.append(w)
     time.sleep(10.0)
     plines = _plines(ctx, start)
     inputs = [P1_INPUTS.search(l).groups() for l in plines if P1_INPUTS.search(l)]
-    released = [l for l in plines if RELEASE.search(l) or 'stale ' in l]
-    out = {'speeds': [{'speed': w['speed'], 'line': w.get('line'), 'lines': w.get('lines'),
-                       'slot0': (w.get('per_slot') or {}).get('0')} for w in results],
-           'p1_inputs': inputs, 'released': released}
+    hitches, released = _releases(plines)
+    out = {'speeds': [{k: w.get(k) for k in ('speed', 'reached', 'reset', 'line', 'lines', 'fim_by_slot', 'updates',
+                                             'slot0_per_update', 'game_fps', 'passes_in_window', 'mapped_samples',
+                                             'mapped_active', 'mapped_examples')} for w in results],
+           'p1_inputs': inputs, 'released': released, 'hitch_rearms': hitches}
     steps._save(ctx, tag, out)
     problems = []
     for w in results:
-        rate = ((w.get('per_slot') or {}).get('0') or {}).get('calls_per_vsync')
-        if rate is None or not 0.8 <= rate <= 1.2:
-            problems.append('%s: slot 0 entry %s per vsync' % (w['speed'], rate))
-        if w['speed'] not in ('x1', 'start') and not w.get('line'):
-            problems.append('%s: no [GameSpeed] lobby line' % w['speed'])
+        rate = w.get('slot0_per_update')
+        if rate is None or not 0.9 <= rate <= 1.1:
+            problems.append('%s: slot 0 entry %s per practice update' % (w['speed'], rate))
+        if w['speed'] != 'start' and w.get('reached') != w['speed']:
+            problems.append('%s: TrainingRooms is at %s (line %s)' % (w['speed'], w.get('reached'), w.get('line')))
     if released:
         problems.append('released during the speeds: %s' % released[:2])
     if len(plan) > 1 and len(inputs) < 2:
         problems.append('p1_inputs did not keep rising: %s' % inputs)
     if problems:
         raise RuntimeError('; '.join(problems))
-    return {'speeds': [(s['speed'], (s['slot0'] or {}).get('calls_per_vsync'), (s['line'] or '')[-80:])
-                       for s in out['speeds']]}
+    return {'speeds': [(s['speed'], s['slot0_per_update'], s['game_fps'], (s['line'] or '')[-70:])
+                       for s in out['speeds']], 'hitch_rearms': len(hitches)}
 
 
 def mark(ctx, key='match'):

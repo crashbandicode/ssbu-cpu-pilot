@@ -23,4 +23,5 @@ The rows also load hooks and route segments from other lanes' Eden folders, unch
 | `segments/chord-record.edenmacro.json` (copied) | `f2fa1848d9988aea562b142421767175b60a3b836770c3f537b7473e9dd18e04` | worker B's `/home/intpa/eden-runs/r7-rows-stage/segments/` |
 
 Runner: the playbook's `tools/eden-runner/runner.py` at `4ca80e1`, run through `tools/eden-test/eden_test.py`.
-pp1 (`pp1-a725c27-y`) ran an earlier `pp.py` (sha256 `b6e47c7dfd32…`): the same functions, before `speeds` took a `tag`.
+
+pp1 (`pp1-a725c27-y`) ran an earlier `pp.py` (sha256 `b6e47c7dfd32…`): the same rows, measured per vsync. pp2 (`pp2-a725c27-s`) ran this one, which counts the pilot's entry per practice update and reads P1's mapped input after the pilot's write; `tools/trace_rate.py` recomputes those numbers from the run's trace.
