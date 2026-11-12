@@ -2,7 +2,7 @@
 //!
 //! Everything here except `native` is pure and host-tested: the three
 //! settings and their INI form, the L+R+X level cycle and when it stands down
-//! for Online Deluxe's window, the level-to-rank ladder, the AI-to-pad
+//! for Online Deluxe's rows pages, the level-to-rank ladder, the AI-to-pad
 //! encoding, the per-frame pilot session and the HUD label. `native` (feature
 //! `native`, Switch only) holds the raw game calls; it has no Skyline
 //! dependency, so a host with its own Skyline version (the Training Modpack)

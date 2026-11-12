@@ -211,14 +211,14 @@ unsafe fn observe(scope: Scope) -> Seen {
 unsafe fn pilot_frame(out: *mut MappedInputs, raw_buttons: u32, slot: u8, scope: Scope) {
     let p = &mut *PILOT.0.get();
     // L+R+X steps the level whenever P1 is set to CPU (0.2.1; before, only
-    // once the CPU was driving), except while Online Deluxe's window is
-    // visible (0.2.4): the press is the window's then, and on the P1 row
-    // Deluxe asks for the step itself (`menu::Handler::request`). The window
+    // once the CPU was driving), except while Online Deluxe's window shows a
+    // page with rows (0.2.4): the press is the window's then, and on the P1
+    // row Deluxe asks for the step itself (`menu::Handler::request`). Deluxe
     // is asked only while the three buttons are held.
     let cpu = SETTINGS.load().pilot;
     let held = buttons::combo_held(raw_buttons);
-    let window = cpu && held && deluxe_window_visible();
-    if p.combo.step(held, deluxe::pad_steps(cpu, window)) {
+    let rows = cpu && held && deluxe_rows_page();
+    if p.combo.step(held, deluxe::pad_steps(cpu, rows)) {
         let now = SETTINGS.update(|s| Settings {
             level: combo::next_level(s.level),
             ..s
@@ -387,9 +387,9 @@ unsafe fn find_deluxe_overlay() -> bool {
     true
 }
 
-/// Deluxe's window is visible, per its export. Without the export (an older
-/// Deluxe, or none) there is no window. Lock-free on Deluxe's side.
-fn deluxe_window_visible() -> bool {
+/// Deluxe's window shows a page with rows, per its export. Without the export
+/// (an older Deluxe, or none) there is none. Lock-free on Deluxe's side.
+fn deluxe_rows_page() -> bool {
     let address = DELUXE_OVERLAY.load(Ordering::Acquire);
     if address == 0 {
         return false;
@@ -401,7 +401,7 @@ fn deluxe_window_visible() -> bool {
         let mut state = DeluxeOverlayStateV1::default();
         f(&mut state).then_some(state)
     };
-    deluxe::window_visible(filled)
+    deluxe::rows_page(filled)
 }
 
 fn watch_battle_end() {
@@ -685,11 +685,11 @@ mod menu {
             match option {
                 0 if choice < settings::P1_CHOICES.len() => {
                     // Deluxe's request for the current choice is its L+R+X.
-                    // P1's pad stands down while Deluxe's window is visible
+                    // The P1 row is on a rows page, where P1's pad stands down
                     // (`pilot_frame`), so this is the press's one step; only
-                    // an older Deluxe without the export reads as no window,
-                    // and in battle its press was stepped by the pad already.
-                    let skip = !deluxe::request_steps(battle_frames_running(), deluxe_window_visible());
+                    // an older Deluxe without the export reads as no rows
+                    // page, and in battle its press was stepped by the pad.
+                    let skip = !deluxe::request_steps(battle_frames_running(), deluxe_rows_page());
                     SETTINGS.update(|s| {
                         if skip && choice == settings::p1_choice(s) {
                             s

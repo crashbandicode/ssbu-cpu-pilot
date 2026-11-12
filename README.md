@@ -21,7 +21,7 @@ Press **L+R+Down** until Online Deluxe shows the **CPU Pilot** page, then
 
 | Row | |
 | --- | --- |
-| P1 | `Player`, or `CPU (L1)` … `CPU (L9)`: the CPU plays P1 in matches and Training, with the HUD tag `CPU Lv<n>`, and (0.2.3) in the Quickplay waiting-room practice, which shows no tag; menus stay yours. When a match is found the CPU keeps P1 in the match. ZR+Right/Left switches Player ↔ CPU in one press and keeps the level. **L+R+X** steps the level 1 → 9 → 1 (starts at 3, saved): on this row (Deluxe 0.10.1 or later), or on P1's controller during a match while Deluxe's window is hidden. Since 0.2.4, with Deluxe 0.10.5 or later, L+R+X under the shown window belongs to the window: on this row it steps the level once, elsewhere it leaves the level alone. P1 is the player again after a reboot. |
+| P1 | `Player`, or `CPU (L1)` … `CPU (L9)`: the CPU plays P1 in matches and Training, with the HUD tag `CPU Lv<n>`, and (0.2.3) in the Quickplay waiting-room practice, which shows no tag; menus stay yours. When a match is found the CPU keeps P1 in the match. ZR+Right/Left switches Player ↔ CPU in one press and keeps the level. **L+R+X** steps the level 1 → 9 → 1 (starts at 3, saved): on this row (Deluxe 0.10.1 or later), or on P1's controller during a match. Since 0.2.4, with Deluxe 0.10.5 or later, L+R+X while Deluxe's window shows a page with rows belongs to the window: on this row it steps the level once, on other rows it leaves the level alone; with the window hidden or on Performance, P1's controller steps it. P1 is the player again after a reboot. |
 | Auto rematch | Answers Yes to the online "Rematch?" pop-up. |
 | Auto save replay | Saves the replay at the results screen, offline and online (then answers "Rematch?" if Auto rematch is on). |
 

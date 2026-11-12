@@ -23,7 +23,7 @@ version. Pin a `rev`: the API is versioned by commit until a release.
 | --- | --- | --- |
 | `settings` | yes | `Settings` (P1 CPU, level 1–9, auto rematch, auto save replay), `SharedSettings` (lock-free), `parse_ini` / `write_ini` (no heap); the P1 row (0.1.1): `P1_CHOICES` (`Player`, `CPU (L1)` … `CPU (L9)`), `p1_choice`, `p1_request` (a neighbouring choice toggles Player/CPU keeping the level, the current one steps the level) |
 | `combo` | yes | `Combo::step(held, enabled)` (one level step per L+R+X press), `next_level` |
-| `deluxe` | yes | since 0.1.4: Online Deluxe's window state, `ssbu_online_deluxe_overlay_state_v1` (Deluxe 0.10.5+): `DeluxeOverlayStateV1`, `SYMBOL`, the flags, `window_visible` (no export means no window), `pad_steps` (the pad's L+R+X stands down while the window is visible), `request_steps` (Deluxe's L+R+X on the P1 row is the press's one step), `Retry` (look the symbol up again after a miss at most once a second) |
+| `deluxe` | yes | since 0.1.4: Online Deluxe's window state, `ssbu_online_deluxe_overlay_state_v1` (Deluxe 0.10.5+): `DeluxeOverlayStateV1`, `SYMBOL`, the flags, `rows_page` (`DELUXE_ROWS_PAGE`; no export means no rows page), `pad_steps` (the pad's L+R+X stands down while the window shows a page with rows), `request_steps` (Deluxe's L+R+X on the P1 row is the press's one step), `Retry` (look the symbol up again after a miss at most once a second) |
 | `level` | yes | the 13.0.5 rank ladder (`ranks`, `rank_for`); refuses a table that differs |
 | `pad` | yes | `MappedInputs` (8 bytes, the final-input-mapping output), `from_ai`, `pack` / `unpack` |
 | `session` | yes | `Session::step(Frame) -> Action` (`Arm`, `Rearm`, `Think`, `Release`, `None`) |
