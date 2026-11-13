@@ -1,8 +1,15 @@
-# Eden evidence — 2026-10-31
+# Eden and Switch evidence, 2026-10-31 to 2026-11-12
 
-The merged-build runs (offline, the Deluxe rows, the card set, auto save and
-the online mid-match switch) are at the end, under "Merged builds". The
-sections before them are the first online runs, on branch `online`.
+In date order: the first online runs on branch `online` (2026-10-31); "Merged
+builds" (offline, the Deluxe rows, the card set, auto save, the online
+mid-match switch, auto rematch, online auto save, the Training Modpack branch,
+the overlay; 2026-10-31 and 2026-11-01); v0.1.0 to 0.2.1 (2026-11-01); the
+Switch and 0.2.2 (2026-11-02); 0.2.3 (2026-11-11); the card installs of 0.2.3
+(2026-11-11) and 0.2.4, and 0.2.4 in Eden (2026-11-12).
+
+The run folders and notes named below (`/home/intpa/ssbu-cpu-pilot/eden/runs/`,
+`/home/intpa/ssbu-cpu-pilot-work/`) are on the Yoga (checked 2026-11-13); the
+Surface has copies of the c, d, g, k01–k02, o, r, s and w01 runs.
 
 Two asymmetric Quickplay matches reached normal matching-frame detector ends.
 This is scoped RNG-detector evidence, not complete simulation-state safety.
@@ -91,7 +98,8 @@ Unverified: replay A/B, live sharing collision/load-order matrix, complete
 indirect-call side effects and noninterference of persistent phase/caches.
 No origin is configured; the live effort/watcher gate is unavailable in this
 OpenCode session. No push, tag, release or physical card write was ordered or
-performed. The [completed checklist](ONLINE-COMPLIANCE.md) also records the
+performed. (That was branch `online` on 2026-10-31. Since then `origin` is
+Forgejo, tags `v0.1.0` to `v0.2.2` exist, and the card installs are below.) The [completed checklist](ONLINE-COMPLIANCE.md) also records the
 copy/cache/disk evidence gaps. The final Git-status receipt is operator-local
 `/home/intpa/ssbu-cpu-pilot-work/research/online-compliance.md`.
 
@@ -276,7 +284,8 @@ types and parsed back by its loader), no menu navigation:
   12.9%); ZR+Left: `Player`, tag `intpater`.
 
 Both: no panic/abort/crash event in `eden_log.txt` (2,177 and 5,064 lines; the
-one match is the setting name), run folders deleted, RELEASED.
+one match is the setting name), the Ally's run folders deleted (the evidence
+copies are in `runs/k03`, `runs/k04`), RELEASED.
 
 ### smash-gamepad-overlay reading this plugin's state (g01–g04)
 
@@ -398,7 +407,8 @@ both builds in place, the tile cursor, and the card's Deluxe INI. Evidence in
   a level change the game briefly shows P1's own name tag: the level is applied
   by handing P1 back and arming again, as in 0.1.0.
 - Both: `eden_log.txt` 5,800 and 5,657 lines, no panic/abort/crash event (the
-  one match is the setting name); run folders deleted, RELEASED.
+  one match is the setting name); the Ally's run folders deleted (the
+  evidence copies are in `runs/m04`, `runs/m05`), RELEASED.
 
 **Not yet run in Eden:** a replay A/B with the detector.
 
@@ -510,3 +520,40 @@ python3 -I tools/test_lobby_report.py
     state (`stale no_battle_frames`), and the next practice frame released on
     the same live objects and armed again (`release restored=true`, `arm …
     slot=0`). `trace.unmapped_access` 0; no panic, abort, crash or Unmapped.
+
+## The card, 0.2.3 and 0.2.4 (2026-11-11 and 2026-11-12)
+
+Added 2026-11-13 from the card receipts (hekate UMS, the playbook's
+`upgrade2-ums.py`, on the operator's order) in
+`smash-training-lobby/artifacts/` (operator-local):
+
+- **0.2.3** (release `98849884…`, code `a725c27`) replaced 0.2.2 (`ed8f308f…`)
+  at 2026-11-11 22:02Z: `card-install-rc8-pilot-0.2.3-r2` (`installed_verified`,
+  then `verified_in_place`; the first attempt, `card-install-rc8-pilot-0.2.3`,
+  rolled back and verified).
+- **0.2.4** (release `abd305e6…`, `main` `d319f96`) replaced 0.2.3 at
+  2026-11-12 01:11Z: `card-install-rc9/3-pilot` (`installed_verified`, then
+  `verified_in_place`). Every later card receipt, up to
+  `card-install-detector-0.5.1` (2026-11-12), still lists `abd305e6…`.
+
+No Switch play of 0.2.3 or 0.2.4 is on record.
+
+## 0.2.4 in Eden (rc9-fu-01950601), 2026-11-12
+
+The XPS, Eden-GIF `d9594758b629-…-svc-x8-x17` (`7d5de744…`), the 19 NROs of the
+rc.9 card set (TrainingRooms `01950601` as its diag build; among them Online
+Deluxe 0.10.5 `c37ee0ff…` and this plugin's release `abd305e6…`) plus the tile
+cursor; Training. Row
+`rc9-pilot-c8` (TrainingRooms' rc.9 ship rows, `rc9-chords/rc9_pilot.py`),
+01:01:57Z–01:02:47Z, PASS. Receipt:
+`/home/intpa/eden-runs/rc9-fu-01950601/out/rc9-pilot-c8/rc9-c8.json` on the XPS.
+
+- Install: `plugin=ssbu-cpu-pilot/0.2.4 level=3 … result=installed
+  heap_allocations=0 menu=registered menu_allocations=58 deluxe_overlay=found`.
+- P1 set to CPU at level 3 on the CPU Pilot page, then one L+R+X in each
+  window state, read back from the pilot's `config.ini`: on the P1 row 3 → 4
+  (one step), on Window Options 4 → 4 (no step), with the window hidden 4 → 5
+  (one step, from the pad). Then the level was stepped back to 3 and P1 set to
+  `Player`.
+- The boot's 14 rows all passed. A Performance page was not reached (the
+  card's Deluxe INI hides it); the host tests cover it.

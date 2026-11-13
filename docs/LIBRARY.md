@@ -15,7 +15,9 @@ ssbu-cpu-pilot-core = { git = "https://git.syntaxbyexample.com/intpa/ssbu-cpu-pi
 
 Or a `path` to a local checkout. The crate has no dependencies and no
 Skyline dependency, so it links into a plugin built with any Skyline
-version. Pin a `rev`: the API is versioned by commit until a release.
+version. Pin a `rev` or a tag: `v0.2.1` carries core 0.1.1 and `v0.2.2` core
+0.1.2; core 0.1.3 (0.2.3) and 0.1.4 (0.2.4) have no tag yet (2026-11-13). The
+Forgejo repository is private, so cargo needs credentials for the `git` form.
 
 ## Modules
 

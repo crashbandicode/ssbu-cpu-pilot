@@ -2,7 +2,9 @@
 
 Implementation on `results`, based on `81a07fa`. No Eden, Switch, remote changes,
 pushes, or delegation were performed. This is implemented code and static RE,
-not a native acceptance result. Exact build identities and final checks are in
+not a native acceptance result. (Note, 2026-11-13: Eden results were added
+later, below and in [EDEN-RESULTS.md](EDEN-RESULTS.md): c14–c19 offline,
+r01/r02 rematch, s02–s04 online save. No Switch result.) Exact build identities and final checks are in
 `/home/intpa/ssbu-cpu-pilot-work/research/results-impl.md` and
 `results-compliance.md` in the same research directory.
 
@@ -94,10 +96,11 @@ epoch without retry. A late signal cannot restart it.
    arrives, ready or not (including one whose port could not be read), no A is
    ever pressed again in that epoch, and an A still held is released at once
    on its own port. Online too (step 6). Never on Training, replay playback,
-   any unsupported scene, or with `auto_save_replay` off. **Assumption Eden must confirm:**
-   no fighter-entry mapping exists before the cards, so the splash A goes to
-   UI port 0 (P1's controller) and to no other port; the later Y/Right/A
-   still use the cards' port (`cards_port`), which may differ.
+   any unsupported scene, or with `auto_save_replay` off. No fighter-entry
+   mapping exists before the cards, so the splash A goes to UI port 0 (P1's
+   controller) and to no other port; the later Y/Right/A still use the cards'
+   port (`cards_port`), which may differ. (Confirmed in Eden c19, s03 and s04;
+   see "Validation boundary" below.)
 1. Local cards: wait under 1200 frames (20 s) for phase/pending 2, finished=0,
    save_offered=1, popup idle, modal mask <=1, and save status 0. Then Y once.
    The 1200-frame deadline is counted from the last splash A (or from epoch
@@ -147,10 +150,14 @@ changes, single-port overlays, rematch normal/forced decisions, and online
 save priority. These prove policy behavior, not that the native callback
 observes each transient signal.
 
-Mode reads follow the supplied game_mode guard. The local `0101xxxx` allowlist
-is inferred from the replay plugin's `guards.rs` live-mode fixture; online is
-`07xxxxxx`. Their values during results still need runtime qualification.
-Other modes, including training, playback and local wireless, do not save.
+Mode reads follow the supplied game_mode guard. Local Smash is the
+`0201xxxx` mode family (Eden c14 read `0x02010000` at local Smash results; the
+first `0101xxxx` allowlist refused it); online is melee `0x0e` or `07xxxxxx`
+(`core/src/results.rs`, `scene`). Training (melee `0x0d`) and replay playback
+(`0x05010100`) never press. A local-wireless battle (melee `0x01`, mode
+`0x02010000`, `online::LOCAL_WIRELESS_BATTLE`) is not excluded there: if its
+results keep that mode, `scene` treats them as local Smash and Auto save acts.
+Not run.
 The splash A (core tests `splash_a_*`, `no_splash_a_*`, `full_save_sequence_still_*`,
 `online_splash_a_*`) reached the splash on UI port 0 in Eden offline (c19) and online
 (s03, s04): each time the cards followed the sixth A, about 7 to 8 s after `epoch=begin`.
@@ -179,4 +186,5 @@ Install must show `results_cards=stock/near` (or `/far`),
 For failure tests, require `flow=timeout step=...`, `save=failed_status_4`,
 `save=unexpected_status`, `flow=lost_popup`, or `flow=wrong_answer`, and no
 subsequent presses in that epoch. Epoch logs also expose mode and selected port.
-No gameplay log, GIF, desync result, or hardware claim is supplied.
+The Eden logs and detector results for these flows are in
+[EDEN-RESULTS.md](EDEN-RESULTS.md); no hardware claim is made.

@@ -24,4 +24,8 @@ The rows also load hooks and route segments from other lanes' Eden folders, unch
 
 Runner: the playbook's `tools/eden-runner/runner.py` at `4ca80e1`, run through `tools/eden-test/eden_test.py`.
 
+Note, 2026-11-13: the hashes above match the files the runs used (the Yoga's `/home/intpa/eden-runs/inputs-qcf/rows-r2b/`
+and `/home/intpa/eden-runs/inputs-pilot-patch/r14bc.py`). `chord-record`'s source folder is on the Surface. Worker B's
+`/tmp/opencode/r7/r14bc/rows/r14bc.py` has changed since (now `abc4f23f…`); the copy used is the Yoga's.
+
 pp1 (`pp1-a725c27-y`) ran an earlier `pp.py` (sha256 `b6e47c7dfd32…`): the same rows, measured per vsync. pp2 (`pp2-a725c27-s`) ran this one, which counts the pilot's entry per practice update and reads P1's mapped input after the pilot's write; `tools/trace_rate.py` recomputes those numbers from the run's trace.

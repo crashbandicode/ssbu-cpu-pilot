@@ -80,6 +80,6 @@ Both load orders and inline/far stand-ins remain runtime validation work.
 ## Evidence location
 
 Operator-local disassembly, scan and gate receipts are in
-`/home/intpa/ssbu-cpu-pilot-work/research/online-*`. Host tests exercise scope,
+`/home/intpa/ssbu-cpu-pilot-work/research/online-*` on the Yoga. Host tests exercise scope,
 all slot masks, entry/slot distinctions, bounded attempts and isolation after
 pilot-off. They do not establish Switch memory layouts or online safety.

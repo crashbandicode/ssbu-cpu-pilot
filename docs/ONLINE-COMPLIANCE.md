@@ -1,5 +1,11 @@
 # Online adapter compliance — 2026-10-31
 
+Note, 2026-11-13: a snapshot of branch `online` before its commit. Since then
+`origin` is Forgejo, tags `v0.1.0` to `v0.2.2` exist, the version is 0.2.4,
+`online-pilot.gif` was removed (`3e60ff5`; the README GIF is now
+`cpu-pilot-page.gif`), and the
+operator-local `HANDOFF.md` and `research/` files named below are on the Yoga.
+
 Completed **pre-commit** checklist, playbook `cd9972d`. Implementation and Eden
 runs followed `69a08c0`; the refreshed playbook adds copy/cache/disk obligations.
 `fail` includes an unverified requirement. This is experimental implementation
